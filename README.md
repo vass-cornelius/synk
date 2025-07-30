@@ -50,10 +50,10 @@ Synk is a Python script, so you need Python installed. On macOS, it's likely alr
 
 Synk needs your personal API keys to connect to Moco and JIRA.
 
-1.  In the `synk-main` folder, find the file named `.env.example`.
-2.  **Rename** this file to just `.env`. (Note the dot at the beginning).
-3.  Open the new `.env` file with a text editor (like TextEdit on macOS).
-4.  Fill in your details for each variable.
+1. In the `synk-main` folder, find the file named `.env.example`.
+2. **Rename** this file to just `.env`. (Note the dot at the beginning).
+3. Open the new `.env` file with a text editor (like TextEdit on macOS).
+4. Fill in your details for each variable.
 
 ```ini
 # --- .env file ---
@@ -76,3 +76,15 @@ JIRA_API_TOKEN="your-jira-api-token"
 # Use a regex pattern to match your most common task.
 # Example: To match "CH: Main | ZT/...", use "^CH: Main"
 DEFAULT_TASK_NAME="^CH: Main"
+```
+
+## How to Run Synk
+
+1. Open your Terminal app.
+2. Navigate to the Synk folder using the cd command as you did in Step 3.
+3. Run the tool with this command:
+```bash
+python3 track_time.py
+```
+
+Synk will start, and you can begin tracking your time!
