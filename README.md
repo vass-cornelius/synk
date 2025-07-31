@@ -4,7 +4,7 @@ A lightning-fast command-line tool for tracking your time in Moco and JIRA. Spen
 
 ## What is this?
 
-Synk is a simple Python script that asks you a series of questions in your terminal (e.g., "What project?", "What task?") and uses your answers to create time entries in Moco and log work in JIRA simultaneously. It's designed to be efficient, smart, and easy to use.
+Synk is a simple Python script that asks you a series of questions in your terminal and uses your answers to create time entries in Moco and log work in JIRA simultaneously. It's designed to be efficient, smart, and easy to use.
 
 ## Features
 
@@ -15,9 +15,9 @@ Synk is a simple Python script that asks you a series of questions in your termi
 * **Configurable Default Task**: Set a default task (e.g., "CH: Main") to make your most common entries even faster.
 * **Looping**: Add multiple entries for a day without restarting the tool.
 
-## Getting Started
+## Getting Started (Easy Method)
 
-Follow these steps to get Synk up and running on your machine.
+Follow these simple steps to get Synk up and running.
 
 ### Step 1: Install Python
 
@@ -30,61 +30,46 @@ Synk is a Python script, so you need Python installed. On macOS, it's likely alr
 ### Step 2: Download Synk
 
 1.  Go to the Synk repository page.
-2.  Click the green **`< > Code`** button.
+2.  Click the green **`Code`** button.
 3.  Select **Download ZIP**.
 4.  Find the downloaded `synk-main.zip` file (usually in your Downloads folder) and double-click it to unzip it. You will now have a `synk-main` folder.
 
-### Step 3: Install Dependencies
+### Step 3: Run the Installer
+
+The installer will check for dependencies, help you create your configuration file, and make the scripts ready to use.
 
 1.  Open the **Terminal** app.
 2.  Type `cd ` (with a space after `cd`).
 3.  Drag the `synk-main` folder you unzipped and drop it directly onto the Terminal window. The path to the folder will appear.
 4.  Press **Enter**. Your terminal is now inside the Synk folder.
-5.  Copy and paste the following command into your terminal and press **Enter**:
+5.  Run the installer with this command:
     ```bash
-    pip3 install -r requirements.txt
+    python3 install.py
     ```
-    This will install all the libraries Synk needs to run.
-
-### Step 4: Create Your Configuration File
-
-Synk needs your personal API keys to connect to Moco and JIRA.
-
-1. In the `synk-main` folder, find the file named `.env.example`.
-2. **Rename** this file to just `.env`. (Note the dot at the beginning).
-3. Open the new `.env` file with a text editor (like TextEdit on macOS).
-4. Fill in your details for each variable.
-
-```ini
-# --- .env file ---
-
-# -- Moco Configuration --
-# Your company's Moco subdomain (the part before .mocoapp.com)
-MOCO_SUBDOMAIN="one-inside"
-# Your Moco API Key. Find it in Moco under your Profile -> API Access (https://one-inside.mocoapp.com/profile/integrations)
-MOCO_API_KEY="your-moco-api-key"
-
-# -- JIRA Configuration --
-# Your company's JIRA URL
-JIRA_SERVER="[https://your-domain.atlassian.net](https://your-domain.atlassian.net)"
-# The email you use to log in to JIRA
-JIRA_USER_EMAIL="your-email@example.com"
-# Your JIRA API Token. Generate one here: [https://id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
-JIRA_API_TOKEN="your-jira-api-token"
-
-# -- Optional: Default Task Name --
-# Use a regex pattern to match your most common task.
-# Example: To match "CH: Main | ZT/...", use "^CH: Main"
-DEFAULT_TASK_NAME="^CH: Main"
-```
+6.  The installer will guide you through the rest of the setup.
 
 ## How to Run Synk
 
-1. Open your Terminal app.
-2. Navigate to the Synk folder using the cd command as you did in Step 3.
-3. Run the tool with this command:
-```bash
-python3 track_time.py
-```
+After running the installer, you can start using Synk by double-clicking the command files in the `synk-main` folder:
 
-Synk will start, and you can begin tracking your time!
+* **`start-synk.command`**: Opens a new terminal window and starts the interactive time tracker.
+* **`start-watcher.command`**: Silently starts the background reminder process.
+* **`stop-watcher.command`**: Stops the background reminder process.
+
+---
+
+## Manual Installation (Advanced)
+
+If you prefer to set things up manually, follow these steps instead of running the installer.
+
+1.  **Install Dependencies**:
+    ```bash
+    pip3 install -r requirements.txt
+    ```
+2.  **Create Configuration File**:
+    * Rename `.env.example` to `.env`.
+    * Open the `.env` file and fill in your Moco and JIRA credentials.
+3.  **Make Scripts Executable**:
+    ```bash
+    chmod +x *.command
+    ```
