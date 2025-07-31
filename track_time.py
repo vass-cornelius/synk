@@ -5,6 +5,7 @@ import sys
 import pkg_resources
 from datetime import datetime, timedelta, date
 
+
 # --- DEPENDENCY CHECK ---
 required_packages = ['requests', 'jira', 'python-dotenv', 'rich']
 missing_packages = []
