@@ -53,17 +53,16 @@ def moco_post(session, subdomain, endpoint, data):
         Console().print(f"[bold red]❌ Moco API Error creating entry:[/bold red] {e.response.text if e.response else e}")
         sys.exit(1)
 
-def get_last_entry_end_time(session, subdomain, user_id, for_date):
-    """Fetch end time of the last entry by parsing its description."""
+def get_last_activity(session, subdomain, user_id, for_date):
+    """Fetch the entire object of the last recorded entry for the user on a specific date."""
     params = {'user_id': user_id, 'from': for_date.isoformat(), 'to': for_date.isoformat()}
     activities = moco_get(session, subdomain, "activities", params=params)
     if not activities:
         return None
     
+    # Sort by 'id' in descending order to ensure the latest entry is first.
     activities.sort(key=lambda x: x.get('id', 0), reverse=True)
-    description = activities[0].get("description", "")
-    match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', description)
-    return match.group(2) if match else None
+    return activities[0]
 
 def validate_time_format(time_str):
     """Check if a string is in HH:mm format."""
@@ -129,6 +128,9 @@ def main():
             
     console.print(f"\n✅ Tracking time for: [bold yellow]{work_date.strftime('%A, %Y-%m-%d')}[/bold yellow]")
 
+    # Get the last activity once per day to use for defaults
+    last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
+
     while True:
         with console.status("[yellow]Fetching projects...[/yellow]"):
             all_assigned_projects = moco_get(moco_session, moco_subdomain, "projects/assigned")
@@ -146,25 +148,43 @@ def main():
             console.print("\n[bold red]❌ No assigned projects with active tasks were found.[/bold red]")
             break
 
-        console.print("\n[cyan]2.[/cyan] [bold]What project did you work on?[/bold]")
+        # --- UPDATED: Default project logic ---
+        has_last_project_default = False
+        if last_activity:
+            last_project_id = last_activity.get('project', {}).get('id')
+            project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
+            if project_to_move:
+                assigned_projects.remove(project_to_move)
+                assigned_projects.insert(0, project_to_move)
+                has_last_project_default = True
+
+        project_prompt = Text("\n2. ", style="cyan", end="")
+        project_prompt.append("What project did you work on?", style="bold")
+        if has_last_project_default:
+            default_project = assigned_projects[0]
+            customer_name = default_project.get('customer', {}).get('name', 'No Customer')
+            project_name = default_project['name']
+            project_prompt.append(f" (empty for last used: {customer_name} / {project_name})")
+
+        console.print(project_prompt)
         for i, p in enumerate(assigned_projects):
             customer = p.get('customer', {}).get('name', 'No Customer')
             console.print(f"  [magenta][{i+1:>2}][/magenta] {customer} / {p['name']}")
         
-        # --- UPDATED: Project selection with confirmation ---
         while True:
             try:
-                proj_choice = int(Prompt.ask("[bold]Project number[/bold]")) - 1
-                if 0 <= proj_choice < len(assigned_projects):
-                    selected_project_data = assigned_projects[proj_choice]
+                choice_input = Prompt.ask("[bold]Project number[/bold]")
+                if has_last_project_default and not choice_input:
+                    selected_project_data = assigned_projects[0]
                     customer = selected_project_data.get('customer', {}).get('name', 'No Customer')
                     project_name = selected_project_data['name']
-                    
-                    if Confirm.ask(f"  You selected: [bright_magenta]{customer} / {project_name}[/bright_magenta]. Is this correct?", default=True):
-                        break  # Exit loop if confirmed
-                    else:
-                        console.print("  [yellow]Please select a different project.[/yellow]")
-                        continue # Loop back to ask for input
+                    console.print(f"  ✅ Defaulting to: [bright_magenta]{customer} / {project_name}[/bright_magenta]")
+                    break
+
+                proj_choice = int(choice_input) - 1
+                if 0 <= proj_choice < len(assigned_projects):
+                    selected_project_data = assigned_projects[proj_choice]
+                    break
                 else:
                     console.print("  [red]Choice out of range. Try again.[/red]")
             except ValueError:
@@ -227,8 +247,14 @@ def main():
                 console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
         
         comment = Prompt.ask("\n[cyan]5.[/cyan] [bold]Anything to add (comment)?[/bold]")
+        
+        last_end_time = None
+        if last_activity:
+            description = last_activity.get("description", "")
+            match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', description)
+            if match:
+                last_end_time = match.group(2)
 
-        last_end_time = get_last_entry_end_time(moco_session, moco_subdomain, moco_user_id, work_date)
         start_prompt = Text("\n6. ", style="cyan", end="")
         start_prompt.append("When did you start?", style="bold")
         if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
@@ -295,6 +321,9 @@ def main():
                     except JIRAError as e: console.print(f"❌ [red]Failed to add JIRA worklog:[/red] {e.text}")
         else:
             console.print(" Canceled.")
+
+        # Refresh last activity to get the one we just created
+        last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
             break
