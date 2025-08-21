@@ -23,6 +23,7 @@ if missing_packages:
 
 # --- Rich and other library imports ---
 import requests
+from requests.auth import HTTPBasicAuth
 from jira import JIRA, JIRAError
 from dotenv import load_dotenv
 from rich.console import Console
@@ -31,9 +32,9 @@ from rich.prompt import Prompt, Confirm
 from rich.text import Text
 
 # --- API HELPER FUNCTIONS ---
-def moco_get(session, subdomain, endpoint, params=None):
+def moco_get(session, moco_subdomain, endpoint, params=None):
     """Generic GET request handler for Moco API."""
-    url = f"https://{subdomain}.mocoapp.com/api/v1/{endpoint}"
+    url = f"https://{moco_subdomain}.mocoapp.com/api/v1/{endpoint}"
     try:
         response = session.get(url, params=params)
         response.raise_for_status()
@@ -42,9 +43,9 @@ def moco_get(session, subdomain, endpoint, params=None):
         Console().print(f"[bold red]❌ Moco API Error:[/bold red] {e}")
         sys.exit(1)
 
-def moco_post(session, subdomain, endpoint, data):
+def moco_post(session, moco_subdomain, endpoint, data):
     """Generic POST request handler for Moco API."""
-    url = f"https://{subdomain}.mocoapp.com/api/v1/{endpoint}"
+    url = f"https://{moco_subdomain}.mocoapp.com/api/v1/{endpoint}"
     try:
         response = session.post(url, json=data)
         response.raise_for_status()
@@ -53,16 +54,29 @@ def moco_post(session, subdomain, endpoint, data):
         Console().print(f"[bold red]❌ Moco API Error creating entry:[/bold red] {e.response.text if e.response else e}")
         sys.exit(1)
 
-def get_last_activity(session, subdomain, user_id, for_date):
+def get_last_activity(session, moco_subdomain, user_id, for_date):
     """Fetch the entire object of the last recorded entry for the user on a specific date."""
     params = {'user_id': user_id, 'from': for_date.isoformat(), 'to': for_date.isoformat()}
-    activities = moco_get(session, subdomain, "activities", params=params)
+    activities = moco_get(session, moco_subdomain, "activities", params=params)
     if not activities:
         return None
     
-    # Sort by 'id' in descending order to ensure the latest entry is first.
     activities.sort(key=lambda x: x.get('id', 0), reverse=True)
     return activities[0]
+
+def search_jira_issues(jql, jira_server, auth, max_results=5):
+    """Searches for JIRA issues using the REST API."""
+    url = f"{jira_server}/rest/api/3/search/jql"
+    headers = {"Accept": "application/json"}
+    query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
+    
+    try:
+        response = requests.get(url, headers=headers, params=query, auth=auth)
+        response.raise_for_status()
+        return response.json().get('issues', [])
+    except requests.exceptions.RequestException as e:
+        Console().print(f"[bold red]❌ JIRA Search Error:[/bold red] {e}")
+        return []
 
 def validate_time_format(time_str):
     """Check if a string is in HH:mm format."""
@@ -96,6 +110,7 @@ def setup_clients(console):
             sys.exit(1)
 
         try:
+            # We still initialize the client for easy authentication and worklog posting
             jira_client = JIRA(server=jira_server, basic_auth=(jira_user_email, jira_api_token))
             jira_client.myself()
             console.print("✅ [green]JIRA connection successful.[/green]")
@@ -105,15 +120,18 @@ def setup_clients(console):
             
     moco_session = requests.Session()
     moco_session.headers.update({'Authorization': f'Bearer {moco_api_key}', 'Content-Type': 'application/json'})
+    
+    # Create auth object for direct requests calls
+    jira_auth = HTTPBasicAuth(jira_user_email, jira_api_token)
 
-    return moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name
+    return moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name, jira_server, jira_auth
 
 # --- MAIN WORKFLOW ---
 def main():
     console = Console()
     console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
     
-    moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name = setup_clients(console)
+    moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name, jira_server, jira_auth = setup_clients(console)
 
     while True:
         date_input = Prompt.ask("[cyan]1.[/cyan] Enter date ([bold]YYYY-MM-DD[/bold]), or leave empty for today")
@@ -128,19 +146,14 @@ def main():
             
     console.print(f"\n✅ Tracking time for: [bold yellow]{work_date.strftime('%A, %Y-%m-%d')}[/bold yellow]")
 
-    # Get the last activity once per day to use for defaults
     last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
 
     while True:
         with console.status("[yellow]Fetching projects...[/yellow]"):
             all_assigned_projects = moco_get(moco_session, moco_subdomain, "projects/assigned")
-            filtered_projects = []
-            for project in all_assigned_projects:
-                if project.get('active', False):
-                    active_tasks = [t for t in project.get('tasks', []) if t.get('active', False)]
-                    if active_tasks:
-                        project['tasks'] = active_tasks
-                        filtered_projects.append(project)
+            filtered_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
+            for p in filtered_projects:
+                p['tasks'] = [t for t in p.get('tasks', []) if t.get('active', False)]
             assigned_projects = filtered_projects
             assigned_projects.sort(key=lambda p: (p.get('customer', {}).get('name', '').lower(), p.get('name', '').lower()))
 
@@ -148,7 +161,6 @@ def main():
             console.print("\n[bold red]❌ No assigned projects with active tasks were found.[/bold red]")
             break
 
-        # --- UPDATED: Default project logic ---
         has_last_project_default = False
         if last_activity:
             last_project_id = last_activity.get('project', {}).get('id')
@@ -191,18 +203,9 @@ def main():
                 console.print("  [red]Please enter a valid number.[/red]")
         
         tasks_original = selected_project_data.get('tasks', [])
-        
-        tasks_display = []
-        for task in tasks_original:
-            display_name = task.get('name', '').split('|')[0].strip()
-            tasks_display.append({**task, 'display_name': display_name})
+        tasks_display = [{'display_name': t.get('name', '').split('|')[0].strip(), **t} for t in tasks_original]
 
-        default_task = None
-        if default_task_name:
-            for task in tasks_display:
-                if re.search(default_task_name, task.get('name', '')):
-                    default_task = task
-                    break
+        default_task = next((t for t in tasks_display if default_task_name and re.search(default_task_name, t.get('name', ''))), None)
         
         task_prompt = Text("\n3. ", style="cyan", end="")
         task_prompt.append("What task did you work on?", style="bold")
@@ -227,31 +230,65 @@ def main():
 
         jira_issue, jira_id = None, None
         while True:
-            jira_id_input = Prompt.ask("\n[cyan]4.[/cyan] [bold]JIRA ticket?[/bold] (e.g., PROJ-123, empty to skip)")
+            jira_id_input = Prompt.ask("\n[cyan]4.[/cyan] [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
+            
             if not jira_id_input:
                 break
-            try:
-                with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
-                    jira_issue = jira_client.issue(jira_id_input.upper())
+
+            if jira_id_input == '?':
+                with console.status("[yellow]Fetching recent JIRA tickets...[/yellow]"):
+                    jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
+                    recent_issues = search_jira_issues(jql_query, jira_server, jira_auth, max_results=5)
                 
-                console.print(f"  ✅ [green]Found:[/green] {jira_issue.fields.summary}")
+                if not recent_issues:
+                    console.print("  [yellow]No recent or in-progress tickets found.[/yellow]")
+                    continue
+
+                console.print("  [bold]Select a recent ticket:[/bold]")
+                for i, issue in enumerate(recent_issues):
+                    console.print(f"    [magenta][{i+1:>2}][/magenta] {issue['key']}: {issue['fields']['summary']}")
+                
+                while True:
+                    try:
+                        choice = int(Prompt.ask("  [bold]Ticket number[/bold] (or 0 to go back)"))
+                        if choice == 0:
+                            break
+                        if 1 <= choice <= len(recent_issues):
+                            jira_id = recent_issues[choice - 1]['key']
+                            jira_issue = jira_client.issue(jira_id) # Fetch full issue object for worklog
+                            break
+                        else:
+                            console.print("  [red]Choice out of range.[/red]")
+                    except ValueError:
+                        console.print("  [red]Please enter a number.[/red]")
+                
+                if jira_issue:
+                    break
+                else:
+                    continue
+
+            with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
+                search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', jira_server, jira_auth, max_results=1)
+            
+            if search_results:
+                jira_issue_candidate_data = search_results[0]
+                console.print(f"  ✅ [green]Found:[/green] {jira_issue_candidate_data['fields']['summary']}")
                 
                 if Confirm.ask("Is this the correct ticket?", default=True):
-                    jira_id = jira_id_input.upper()
+                    jira_id = jira_issue_candidate_data['key']
+                    jira_issue = jira_client.issue(jira_id) # Fetch full issue object for worklog
                     break
                 else:
                     console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
                     continue
-
-            except JIRAError:
+            else:
                 console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
         
         comment = Prompt.ask("\n[cyan]5.[/cyan] [bold]Anything to add (comment)?[/bold]")
         
         last_end_time = None
         if last_activity:
-            description = last_activity.get("description", "")
-            match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', description)
+            match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', last_activity.get("description", ""))
             if match:
                 last_end_time = match.group(2)
 
@@ -322,7 +359,6 @@ def main():
         else:
             console.print(" Canceled.")
 
-        # Refresh last activity to get the one we just created
         last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
