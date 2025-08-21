@@ -151,14 +151,24 @@ def main():
             customer = p.get('customer', {}).get('name', 'No Customer')
             console.print(f"  [magenta][{i+1:>2}][/magenta] {customer} / {p['name']}")
         
+        # --- UPDATED: Project selection with confirmation ---
         while True:
             try:
                 proj_choice = int(Prompt.ask("[bold]Project number[/bold]")) - 1
                 if 0 <= proj_choice < len(assigned_projects):
                     selected_project_data = assigned_projects[proj_choice]
-                    break
-                else: console.print("  [red]Choice out of range. Try again.[/red]")
-            except ValueError: console.print("  [red]Please enter a valid number.[/red]")
+                    customer = selected_project_data.get('customer', {}).get('name', 'No Customer')
+                    project_name = selected_project_data['name']
+                    
+                    if Confirm.ask(f"  You selected: [bright_magenta]{customer} / {project_name}[/bright_magenta]. Is this correct?", default=True):
+                        break  # Exit loop if confirmed
+                    else:
+                        console.print("  [yellow]Please select a different project.[/yellow]")
+                        continue # Loop back to ask for input
+                else:
+                    console.print("  [red]Choice out of range. Try again.[/red]")
+            except ValueError:
+                console.print("  [red]Please enter a valid number.[/red]")
         
         tasks_original = selected_project_data.get('tasks', [])
         
@@ -208,10 +218,10 @@ def main():
                 
                 if Confirm.ask("Is this the correct ticket?", default=True):
                     jira_id = jira_id_input.upper()
-                    break  # Exit the loop if confirmed
+                    break
                 else:
                     console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
-                    continue # Loop back to ask for input
+                    continue
 
             except JIRAError:
                 console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
