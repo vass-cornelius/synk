@@ -29,10 +29,9 @@ Synk is a Python script, so you need Python installed. On macOS, it's likely alr
 
 ### Step 2: Download Synk
 
-1.  Go to the Synk repository page.
-2.  Click the green **`Code`** button.
-3.  Select **Download ZIP**.
-4.  Find the downloaded `synk-main.zip` file (usually in your Downloads folder) and double-click it to unzip it. You will now have a `synk-main` folder.
+1.  Go to the [latest Synk release page](https://github.com/vass-cornelius/synk/releases/latest).
+2.  Under the "Assets" section, download either the `.zip` or `.tar.gz` file.
+3.  Find the downloaded file in your Downloads folder and double-click it to unzip it. You will now have a `synk-<version>` folder.
 
 ### Step 3: Run the Installer
 
@@ -40,7 +39,7 @@ The installer will check for dependencies, help you create your configuration fi
 
 1.  Open the **Terminal** app.
 2.  Type `cd ` (with a space after `cd`).
-3.  Drag the `synk-main` folder you unzipped and drop it directly onto the Terminal window. The path to the folder will appear.
+3.  Drag the `synk-<version>` folder you unzipped and drop it directly onto the Terminal window. The path to the folder will appear.
 4.  Press **Enter**. Your terminal is now inside the Synk folder.
 5.  Run the installer with this command:
     ```bash
