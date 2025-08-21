@@ -5,7 +5,6 @@ import sys
 import pkg_resources
 from datetime import datetime, timedelta, date
 
-
 # --- DEPENDENCY CHECK ---
 required_packages = ['requests', 'jira', 'python-dotenv', 'rich']
 missing_packages = []
@@ -113,7 +112,7 @@ def setup_clients(console):
 # --- MAIN WORKFLOW ---
 def main():
     console = Console()
-    console.print(Panel.fit("🚀 [bold blue]Time Tracking Tool[/bold blue] 🚀"))
+    console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
     
     moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name = setup_clients(console)
 
@@ -133,18 +132,13 @@ def main():
     while True:
         with console.status("[yellow]Fetching projects...[/yellow]"):
             all_assigned_projects = moco_get(moco_session, moco_subdomain, "projects/assigned")
-            
-            # --- NEW: Stricter project filtering ---
-            # A project is only included if it's active AND has at least one active task.
             filtered_projects = []
             for project in all_assigned_projects:
                 if project.get('active', False):
                     active_tasks = [t for t in project.get('tasks', []) if t.get('active', False)]
                     if active_tasks:
-                        # If the project is valid, update its task list to only the active ones
                         project['tasks'] = active_tasks
                         filtered_projects.append(project)
-            
             assigned_projects = filtered_projects
             assigned_projects.sort(key=lambda p: (p.get('customer', {}).get('name', '').lower(), p.get('name', '').lower()))
 
@@ -167,7 +161,6 @@ def main():
             except ValueError: console.print("  [red]Please enter a valid number.[/red]")
         
         tasks_original = selected_project_data.get('tasks', [])
-        # The tasks list is already pre-filtered, so we don't need to check for empty here
         
         tasks_display = []
         for task in tasks_original:
@@ -205,14 +198,23 @@ def main():
         jira_issue, jira_id = None, None
         while True:
             jira_id_input = Prompt.ask("\n[cyan]4.[/cyan] [bold]JIRA ticket?[/bold] (e.g., PROJ-123, empty to skip)")
-            if not jira_id_input: break
+            if not jira_id_input:
+                break
             try:
                 with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
                     jira_issue = jira_client.issue(jira_id_input.upper())
+                
                 console.print(f"  ✅ [green]Found:[/green] {jira_issue.fields.summary}")
-                jira_id = jira_id_input.upper()
-                break
-            except JIRAError: console.print(f"  ❌ [red]JIRA ticket '{jira_id_input}' not found. Try again.[/red]")
+                
+                if Confirm.ask("Is this the correct ticket?", default=True):
+                    jira_id = jira_id_input.upper()
+                    break  # Exit the loop if confirmed
+                else:
+                    console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
+                    continue # Loop back to ask for input
+
+            except JIRAError:
+                console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
         
         comment = Prompt.ask("\n[cyan]5.[/cyan] [bold]Anything to add (comment)?[/bold]")
 
