@@ -3,3 +3,4 @@ jira
 python-dotenv
 rich
 pync
+pkg_resources
