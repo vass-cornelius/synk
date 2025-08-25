@@ -87,76 +87,250 @@ def parse_and_validate_time_input(time_str):
         return None
 
     if len(time_str) == 3:
-        # Pad with a leading zero, e.g., "800" -> "0800"
         time_str = "0" + time_str
 
-    hour_str = time_str[:2]
-    minute_str = time_str[2:]
-
+    hour_str, minute_str = time_str[:2], time_str[2:]
     try:
-        hour = int(hour_str)
-        minute = int(minute_str)
-
+        hour, minute = int(hour_str), int(minute_str)
         if 0 <= hour <= 23 and 0 <= minute <= 59:
             return f"{hour:02d}:{minute:02d}"
-        else:
-            return None
     except ValueError:
         return None
+    return None
+
+# --- WORKFLOW STEP FUNCTIONS ---
+def ask_for_project(console, assigned_projects, last_activity):
+    has_last_project_default = False
+    if last_activity:
+        last_project_id = last_activity.get('project', {}).get('id')
+        project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
+        if project_to_move:
+            assigned_projects.remove(project_to_move)
+            assigned_projects.insert(0, project_to_move)
+            has_last_project_default = True
+
+    project_prompt = Text("\n▶️ ", style="cyan", end="")
+    project_prompt.append("What project did you work on?", style="bold")
+    if has_last_project_default:
+        default_project = assigned_projects[0]
+        customer_name = default_project.get('customer', {}).get('name', 'No Customer')
+        project_name = default_project['name']
+        project_prompt.append(f" (empty for last used: {customer_name} / {project_name})")
+
+    console.print(project_prompt)
+    for i, p in enumerate(assigned_projects):
+        customer = p.get('customer', {}).get('name', 'No Customer')
+        console.print(f"  [magenta][{i+1:>2}][/magenta] {customer} / {p['name']}")
+    
+    while True:
+        try:
+            choice_input = Prompt.ask("[bold]Project number[/bold]")
+            if has_last_project_default and not choice_input:
+                selected_project_data = assigned_projects[0]
+                customer = selected_project_data.get('customer', {}).get('name', 'No Customer')
+                project_name = selected_project_data['name']
+                console.print(f"  ✅ Defaulting to: [bright_magenta]{customer} / {project_name}[/bright_magenta]")
+                return selected_project_data
+
+            proj_choice = int(choice_input) - 1
+            if 0 <= proj_choice < len(assigned_projects):
+                return assigned_projects[proj_choice]
+            else:
+                console.print("  [red]Choice out of range. Try again.[/red]")
+        except ValueError:
+            console.print("  [red]Please enter a valid number.[/red]")
+
+def ask_for_task(console, selected_project_data, default_task_name):
+    tasks_original = selected_project_data.get('tasks', [])
+    tasks_display = [{'display_name': t.get('name', '').split('|')[0].strip(), **t} for t in tasks_original]
+
+    default_task = next((t for t in tasks_display if default_task_name and re.search(default_task_name, t.get('name', ''))), None)
+    
+    task_prompt = Text("\n▶️ ", style="cyan", end="")
+    task_prompt.append("What task did you work on?", style="bold")
+    if default_task: task_prompt.append(f" (empty for '{default_task['display_name']}')")
+    
+    console.print(task_prompt)
+    for i, t in enumerate(tasks_display): console.print(f"  [magenta][{i+1:>2}][/magenta] {t['display_name']}")
+    
+    while True:
+        choice_input = Prompt.ask("[bold]Task number[/bold]")
+        if default_task and not choice_input:
+            console.print(f"  ✅ Defaulting to: [bright_magenta]{default_task['display_name']}[/bright_magenta]")
+            return default_task
+        try:
+            choice = int(choice_input) - 1
+            if 0 <= choice < len(tasks_display):
+                return tasks_display[choice]
+            else: console.print("  [red]Choice out of range. Try again.[/red]")
+        except ValueError: console.print("  [red]Invalid input. Please enter a number.[/red]")
+
+def ask_for_jira(console, jira_client, jira_server, jira_auth):
+    while True:
+        jira_id_input = Prompt.ask("\n▶️ [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
+        
+        if not jira_id_input:
+            return None, None
+
+        if jira_id_input == '?':
+            with console.status("[yellow]Fetching recent JIRA tickets...[/yellow]"):
+                jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
+                recent_issues = search_jira_issues(jql_query, jira_server, jira_auth, max_results=5)
+            
+            if not recent_issues:
+                console.print("  [yellow]No recent or in-progress tickets found.[/yellow]")
+                continue
+
+            console.print("  [bold]Select a recent ticket:[/bold]")
+            for i, issue in enumerate(recent_issues):
+                console.print(f"    [magenta][{i+1:>2}][/magenta] {issue['key']}: {issue['fields']['summary']}")
+            
+            while True:
+                try:
+                    choice = int(Prompt.ask("  [bold]Ticket number[/bold] (or 0 to go back)"))
+                    if choice == 0:
+                        break
+                    if 1 <= choice <= len(recent_issues):
+                        jira_id = recent_issues[choice - 1]['key']
+                        jira_issue = jira_client.issue(jira_id)
+                        return jira_issue, jira_id
+                    else:
+                        console.print("  [red]Choice out of range.[/red]")
+                except ValueError:
+                    console.print("  [red]Please enter a number.[/red]")
+            
+            if not jira_issue: # If user chose 0
+                continue
+
+        with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
+            search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', jira_server, jira_auth, max_results=1)
+        
+        if search_results:
+            jira_issue_candidate_data = search_results[0]
+            console.print(f"  ✅ [green]Found:[/green] {jira_issue_candidate_data['fields']['summary']}")
+            
+            if Confirm.ask("Is this the correct ticket?", default=True):
+                jira_id = jira_issue_candidate_data['key']
+                jira_issue = jira_client.issue(jira_id)
+                return jira_issue, jira_id
+            else:
+                console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
+                continue
+        else:
+            console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
+
+def ask_for_comment(console):
+    return Prompt.ask("\n▶️ [bold]Anything to add (comment)?[/bold]")
+
+def ask_for_time(console, last_activity):
+    last_end_time = None
+    if last_activity:
+        match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', last_activity.get("description", ""))
+        if match:
+            last_end_time = match.group(2)
+
+    start_prompt = Text("\n▶️ ", style="cyan", end="")
+    start_prompt.append("When did you start?", style="bold")
+    if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
+    
+    while True:
+        start_time_input = Prompt.ask(start_prompt)
+        if start_time_input.lower() == 'last' and last_end_time:
+            start_time_str = last_end_time
+            break
+        if start_time_input.lower() == 'last' and not last_end_time:
+            console.print(f"  [yellow]No previous entries to start after.[/yellow]")
+        
+        parsed_time = parse_and_validate_time_input(start_time_input)
+        if parsed_time:
+            start_time_str = parsed_time
+            break
+        else:
+            console.print("  [red]Invalid format. Use (h)hmm (e.g., 800 or 1730) or 'last'.[/red]")
+
+    end_prompt = Text("▶️ ", style="cyan", end="")
+    end_prompt.append(f"When did you finish? (start: {start_time_str})", style="bold")
+    end_prompt.append(" ((h)hmm or decimal hours)")
+    
+    while True:
+        end_input = Prompt.ask(end_prompt)
+        start_time_dt = datetime.strptime(start_time_str, "%H:%M")
+        
+        parsed_end_time = parse_and_validate_time_input(end_input)
+        if parsed_end_time:
+            end_time_dt = datetime.strptime(parsed_end_time, "%H:%M")
+            if end_time_dt <= start_time_dt:
+                console.print("  [red]End time must be after start time.[/red]")
+                continue
+            duration_hours = (end_time_dt - start_time_dt).total_seconds() / 3600
+            end_time_str = parsed_end_time
+            break
+        else:
+            try:
+                duration_hours = float(end_input)
+                if duration_hours <= 0:
+                    console.print("  [red]Duration must be positive.[/red]")
+                    continue
+                end_time_str = (start_time_dt + timedelta(hours=duration_hours)).strftime("%H:%M")
+                break
+            except ValueError:
+                console.print("  [red]Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).[/red]")
+    
+    return start_time_str, end_time_str, duration_hours
 
 # --- SETUP AND VERIFICATION ---
 def setup_clients(console):
     """Load environment variables, verify credentials, and initialize API clients."""
     load_dotenv()
-    moco_subdomain = os.getenv("MOCO_SUBDOMAIN")
-    moco_api_key = os.getenv("MOCO_API_KEY")
-    jira_server = os.getenv("JIRA_SERVER")
-    jira_user_email = os.getenv("JIRA_USER_EMAIL")
-    jira_api_token = os.getenv("JIRA_API_TOKEN")
-    default_task_name = os.getenv("DEFAULT_TASK_NAME")
+    config = {
+        "moco_subdomain": os.getenv("MOCO_SUBDOMAIN"),
+        "moco_api_key": os.getenv("MOCO_API_KEY"),
+        "jira_server": os.getenv("JIRA_SERVER"),
+        "jira_user_email": os.getenv("JIRA_USER_EMAIL"),
+        "jira_api_token": os.getenv("JIRA_API_TOKEN"),
+        "default_task_name": os.getenv("DEFAULT_TASK_NAME"),
+        "question_order": os.getenv("QUESTION_ORDER", "project,task,jira,comment,time").split(',')
+    }
 
-    if not all([moco_subdomain, moco_api_key, jira_server, jira_user_email, jira_api_token]):
+    if not all([config[k] for k in ["moco_subdomain", "moco_api_key", "jira_server", "jira_user_email", "jira_api_token"]]):
         console.print("[bold red]❌ Error: One or more required environment variables are missing.[/bold red]")
         sys.exit(1)
 
     with console.status("[yellow]Connecting to services...[/yellow]"):
         try:
-            auth_header = {'Authorization': f'Bearer {moco_api_key}'}
-            session_url = f"https://{moco_subdomain}.mocoapp.com/api/v1/session"
+            auth_header = {'Authorization': f'Bearer {config["moco_api_key"]}'}
+            session_url = f"https://{config['moco_subdomain']}.mocoapp.com/api/v1/session"
             response = requests.get(session_url, headers=auth_header)
             response.raise_for_status()
-            moco_user_id = response.json()['id']
+            config["moco_user_id"] = response.json()['id']
             console.print("✅ [green]Moco connection successful.[/green]")
         except (requests.exceptions.RequestException, KeyError) as e:
             console.print(f"❌ [bold red]Moco connection failed:[/bold red] {e}")
             sys.exit(1)
 
         try:
-            # We still initialize the client for easy authentication and worklog posting
-            jira_client = JIRA(server=jira_server, basic_auth=(jira_user_email, jira_api_token))
-            jira_client.myself()
+            config["jira_client"] = JIRA(server=config["jira_server"], basic_auth=(config["jira_user_email"], config["jira_api_token"]))
+            config["jira_client"].myself()
             console.print("✅ [green]JIRA connection successful.[/green]")
         except JIRAError as e:
             console.print(f"❌ [bold red]JIRA connection failed:[/bold red] {e.text}")
             sys.exit(1)
             
-    moco_session = requests.Session()
-    moco_session.headers.update({'Authorization': f'Bearer {moco_api_key}', 'Content-Type': 'application/json'})
-    
-    # Create auth object for direct requests calls
-    jira_auth = HTTPBasicAuth(jira_user_email, jira_api_token)
+    config["moco_session"] = requests.Session()
+    config["moco_session"].headers.update({'Authorization': f'Bearer {config["moco_api_key"]}', 'Content-Type': 'application/json'})
+    config["jira_auth"] = HTTPBasicAuth(config["jira_user_email"], config["jira_api_token"])
 
-    return moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name, jira_server, jira_auth
+    return config
 
 # --- MAIN WORKFLOW ---
 def main():
     console = Console()
     console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
     
-    moco_session, jira_client, moco_subdomain, moco_user_id, default_task_name, jira_server, jira_auth = setup_clients(console)
+    config = setup_clients(console)
 
     while True:
-        date_input = Prompt.ask("[cyan]1.[/cyan] Enter date ([bold]YYYY-MM-DD[/bold]), or leave empty for today")
+        date_input = Prompt.ask("▶️ Enter date ([bold]YYYY-MM-DD[/bold]), or leave empty for today")
         if not date_input:
             work_date = date.today()
             break
@@ -168,201 +342,47 @@ def main():
             
     console.print(f"\n✅ Tracking time for: [bold yellow]{work_date.strftime('%A, %Y-%m-%d')}[/bold yellow]")
 
-    last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
+    last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
     while True:
+        entry_data = {}
+        
+        # Fetch projects once at the start of an entry
         with console.status("[yellow]Fetching projects...[/yellow]"):
-            all_assigned_projects = moco_get(moco_session, moco_subdomain, "projects/assigned")
-            filtered_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
-            for p in filtered_projects:
+            all_assigned_projects = moco_get(config["moco_session"], config["moco_subdomain"], "projects/assigned")
+            assigned_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
+            for p in assigned_projects:
                 p['tasks'] = [t for t in p.get('tasks', []) if t.get('active', False)]
-            assigned_projects = filtered_projects
             assigned_projects.sort(key=lambda p: (p.get('customer', {}).get('name', '').lower(), p.get('name', '').lower()))
 
         if not assigned_projects:
             console.print("\n[bold red]❌ No assigned projects with active tasks were found.[/bold red]")
             break
 
-        has_last_project_default = False
-        if last_activity:
-            last_project_id = last_activity.get('project', {}).get('id')
-            project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
-            if project_to_move:
-                assigned_projects.remove(project_to_move)
-                assigned_projects.insert(0, project_to_move)
-                has_last_project_default = True
-
-        project_prompt = Text("\n2. ", style="cyan", end="")
-        project_prompt.append("What project did you work on?", style="bold")
-        if has_last_project_default:
-            default_project = assigned_projects[0]
-            customer_name = default_project.get('customer', {}).get('name', 'No Customer')
-            project_name = default_project['name']
-            project_prompt.append(f" (empty for last used: {customer_name} / {project_name})")
-
-        console.print(project_prompt)
-        for i, p in enumerate(assigned_projects):
-            customer = p.get('customer', {}).get('name', 'No Customer')
-            console.print(f"  [magenta][{i+1:>2}][/magenta] {customer} / {p['name']}")
+        for step in config["question_order"]:
+            if step == "project":
+                entry_data["selected_project"] = ask_for_project(console, assigned_projects, last_activity)
+            elif step == "task":
+                if "selected_project" not in entry_data: console.print("[red]Error: Project must be selected before task.[/red]"); break
+                entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"])
+            elif step == "jira":
+                entry_data["jira_issue"], entry_data["jira_id"] = ask_for_jira(console, config["jira_client"], config["jira_server"], config["jira_auth"])
+            elif step == "comment":
+                entry_data["comment"] = ask_for_comment(console)
+            elif step == "time":
+                start_time, end_time, duration = ask_for_time(console, last_activity)
+                entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
         
-        while True:
-            try:
-                choice_input = Prompt.ask("[bold]Project number[/bold]")
-                if has_last_project_default and not choice_input:
-                    selected_project_data = assigned_projects[0]
-                    customer = selected_project_data.get('customer', {}).get('name', 'No Customer')
-                    project_name = selected_project_data['name']
-                    console.print(f"  ✅ Defaulting to: [bright_magenta]{customer} / {project_name}[/bright_magenta]")
-                    break
-
-                proj_choice = int(choice_input) - 1
-                if 0 <= proj_choice < len(assigned_projects):
-                    selected_project_data = assigned_projects[proj_choice]
-                    break
-                else:
-                    console.print("  [red]Choice out of range. Try again.[/red]")
-            except ValueError:
-                console.print("  [red]Please enter a valid number.[/red]")
-        
-        tasks_original = selected_project_data.get('tasks', [])
-        tasks_display = [{'display_name': t.get('name', '').split('|')[0].strip(), **t} for t in tasks_original]
-
-        default_task = next((t for t in tasks_display if default_task_name and re.search(default_task_name, t.get('name', ''))), None)
-        
-        task_prompt = Text("\n3. ", style="cyan", end="")
-        task_prompt.append("What task did you work on?", style="bold")
-        if default_task: task_prompt.append(f" (empty for '{default_task['display_name']}')")
-        
-        console.print(task_prompt)
-        for i, t in enumerate(tasks_display): console.print(f"  [magenta][{i+1:>2}][/magenta] {t['display_name']}")
-        
-        while True:
-            choice_input = Prompt.ask("[bold]Task number[/bold]")
-            if default_task and not choice_input:
-                selected_task = default_task
-                console.print(f"  ✅ Defaulting to: [bright_magenta]{selected_task['display_name']}[/bright_magenta]")
-                break
-            try:
-                choice = int(choice_input) - 1
-                if 0 <= choice < len(tasks_display):
-                    selected_task = tasks_display[choice]
-                    break
-                else: console.print("  [red]Choice out of range. Try again.[/red]")
-            except ValueError: console.print("  [red]Invalid input. Please enter a number.[/red]")
-
-        jira_issue, jira_id = None, None
-        while True:
-            jira_id_input = Prompt.ask("\n[cyan]4.[/cyan] [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
-            
-            if not jira_id_input:
-                break
-
-            if jira_id_input == '?':
-                with console.status("[yellow]Fetching recent JIRA tickets...[/yellow]"):
-                    jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
-                    recent_issues = search_jira_issues(jql_query, jira_server, jira_auth, max_results=5)
-                
-                if not recent_issues:
-                    console.print("  [yellow]No recent or in-progress tickets found.[/yellow]")
-                    continue
-
-                console.print("  [bold]Select a recent ticket:[/bold]")
-                for i, issue in enumerate(recent_issues):
-                    console.print(f"    [magenta][{i+1:>2}][/magenta] {issue['key']}: {issue['fields']['summary']}")
-                
-                while True:
-                    try:
-                        choice = int(Prompt.ask("  [bold]Ticket number[/bold] (or 0 to go back)"))
-                        if choice == 0:
-                            break
-                        if 1 <= choice <= len(recent_issues):
-                            jira_id = recent_issues[choice - 1]['key']
-                            jira_issue = jira_client.issue(jira_id) # Fetch full issue object for worklog
-                            break
-                        else:
-                            console.print("  [red]Choice out of range.[/red]")
-                    except ValueError:
-                        console.print("  [red]Please enter a number.[/red]")
-                
-                if jira_issue:
-                    break
-                else:
-                    continue
-
-            with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
-                search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', jira_server, jira_auth, max_results=1)
-            
-            if search_results:
-                jira_issue_candidate_data = search_results[0]
-                console.print(f"  ✅ [green]Found:[/green] {jira_issue_candidate_data['fields']['summary']}")
-                
-                if Confirm.ask("Is this the correct ticket?", default=True):
-                    jira_id = jira_issue_candidate_data['key']
-                    jira_issue = jira_client.issue(jira_id) # Fetch full issue object for worklog
-                    break
-                else:
-                    console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
-                    continue
-            else:
-                console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
-        
-        comment = Prompt.ask("\n[cyan]5.[/cyan] [bold]Anything to add (comment)?[/bold]")
-        
-        last_end_time = None
-        if last_activity:
-            match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', last_activity.get("description", ""))
-            if match:
-                last_end_time = match.group(2)
-
-        start_prompt = Text("\n6. ", style="cyan", end="")
-        start_prompt.append("When did you start?", style="bold")
-        if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
-        
-        while True:
-            start_time_input = Prompt.ask(start_prompt)
-            if start_time_input.lower() == 'last' and last_end_time:
-                start_time_str = last_end_time; break
-            if start_time_input.lower() == 'last' and not last_end_time:
-                console.print(f"  [yellow]No entries on {work_date.isoformat()} to start after.[/yellow]")
-            
-            parsed_time = parse_and_validate_time_input(start_time_input)
-            if parsed_time:
-                start_time_str = parsed_time
-                break
-            else:
-                console.print("  [red]Invalid format. Use (h)hmm (e.g., 800 or 1730) or 'last'.[/red]")
-
-        end_prompt = Text("\n7. ", style="cyan", end="")
-        end_prompt.append(f"When did you finish? (start: {start_time_str})", style="bold")
-        end_prompt.append(" ((h)hmm or decimal hours)")
-        
-        while True:
-            end_input = Prompt.ask(end_prompt)
-            start_time_dt = datetime.strptime(start_time_str, "%H:%M")
-            
-            parsed_end_time = parse_and_validate_time_input(end_input)
-            if parsed_end_time:
-                end_time_dt = datetime.strptime(parsed_end_time, "%H:%M")
-                if end_time_dt <= start_time_dt: console.print("  [red]End time must be after start time.[/red]"); continue
-                duration_hours = (end_time_dt - start_time_dt).total_seconds() / 3600
-                end_time_str = parsed_end_time; break
-            else:
-                try:
-                    duration_hours = float(end_input)
-                    if duration_hours <= 0: console.print("  [red]Duration must be positive.[/red]"); continue
-                    end_time_str = (start_time_dt + timedelta(hours=duration_hours)).strftime("%H:%M"); break
-                except ValueError: console.print("  [red]Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).[/red]")
-
-        customer_name_summary = selected_project_data.get('customer',{}).get('name', 'No Customer')
-        time_part = f"({start_time_str}-{end_time_str})"
-        desc_parts = [part for part in [jira_id, comment, time_part] if part]
+        # Build description and show summary
+        time_part = f"({entry_data.get('start_time', 'N/A')}-{entry_data.get('end_time', 'N/A')})"
+        desc_parts = [part for part in [entry_data.get('jira_id'), entry_data.get('comment'), time_part] if part]
         description = " ".join(desc_parts)
 
         summary_text = Text()
-        summary_text.append(f"Project:    {customer_name_summary} / {selected_project_data['name']}\n", style="white")
-        summary_text.append(f"Task:       {selected_task['display_name']}\n", style="white")
-        if jira_id: summary_text.append(f"JIRA Ticket: {jira_id}\n", style="white")
-        summary_text.append(f"Time:       {start_time_str} - {end_time_str} ({duration_hours:.2f} hours)\n", style="yellow")
+        summary_text.append(f"Project:    {entry_data['selected_project'].get('customer',{}).get('name', 'N/A')} / {entry_data['selected_project']['name']}\n", style="white")
+        summary_text.append(f"Task:       {entry_data['selected_task']['display_name']}\n", style="white")
+        if entry_data.get('jira_id'): summary_text.append(f"JIRA Ticket: {entry_data['jira_id']}\n", style="white")
+        summary_text.append(f"Time:       {entry_data.get('start_time', 'N/A')} - {entry_data.get('end_time', 'N/A')} ({entry_data.get('duration_hours', 0):.2f} hours)\n", style="yellow")
         summary_text.append(f"Description: {description}", style="white")
         
         console.print(Panel(summary_text, title="[bold blue]Summary[/bold blue]", border_style="blue", expand=False))
@@ -370,25 +390,29 @@ def main():
         if Confirm.ask("\n[bold]💾 Save this entry?[/bold]", default=True):
             with console.status("[yellow]Saving...[/yellow]"):
                 moco_payload = {
-                    "date": work_date.isoformat(), "project_id": selected_project_data['id'],
-                    "task_id": selected_task['id'], "hours": round(duration_hours, 4), "description": description
+                    "date": work_date.isoformat(),
+                    "project_id": entry_data["selected_project"]['id'],
+                    "task_id": entry_data["selected_task"]['id'],
+                    "hours": round(entry_data["duration_hours"], 4),
+                    "description": description
                 }
-                moco_post(moco_session, moco_subdomain, "activities", data=moco_payload)
+                moco_post(config["moco_session"], config["moco_subdomain"], "activities", data=moco_payload)
                 console.print("✅ [green]Entry saved to Moco.[/green]")
                 
-                if jira_issue:
+                if entry_data.get("jira_issue"):
                     try:
-                        jira_comment = f"{comment} {time_part}".strip()
-                        jira_client.add_worklog(
-                            issue=jira_issue, timeSpentSeconds=int(duration_hours*3600),
-                            comment=jira_comment, started=datetime.combine(work_date, start_time_dt.time()).astimezone()
+                        jira_comment = f"{entry_data.get('comment', '')} {time_part}".strip()
+                        start_dt = datetime.strptime(entry_data['start_time'], "%H:%M")
+                        config["jira_client"].add_worklog(
+                            issue=entry_data["jira_issue"], timeSpentSeconds=int(entry_data["duration_hours"]*3600),
+                            comment=jira_comment, started=datetime.combine(work_date, start_dt.time()).astimezone()
                         )
                         console.print("✅ [green]Worklog added to JIRA.[/green]")
                     except JIRAError as e: console.print(f"❌ [red]Failed to add JIRA worklog:[/red] {e.text}")
         else:
             console.print(" Canceled.")
 
-        last_activity = get_last_activity(moco_session, moco_subdomain, moco_user_id, work_date)
+        last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
             break
