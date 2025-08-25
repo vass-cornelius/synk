@@ -67,7 +67,7 @@ def get_last_activity(session, moco_subdomain, user_id, for_date):
 
 def search_jira_issues(jql, jira_server, auth, max_results=5):
     """Searches for JIRA issues using the REST API."""
-    url = f"{jira_server}/rest/api/3/search"
+    url = f"{jira_server}/rest/api/3/search/jql"
     headers = {"Accept": "application/json"}
     query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
     
@@ -127,7 +127,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     parsed_activities.sort(key=lambda x: x['start_time_for_sort'])
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
-    table.add_column("Time", style="cyan", width=15, no_wrap=True)
+    table.add_column("Time", style="cyan", width=15)
     table.add_column("Project")
     table.add_column("Task")
     table.add_column("Description", no_wrap=False)
@@ -149,6 +149,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
         table.add_row(time_str, project_name, task_name, desc_display)
     
     console.print(table)
+
 
 def ask_for_project(console, assigned_projects, last_activity):
     has_last_project_default = False
@@ -216,7 +217,7 @@ def ask_for_task(console, selected_project_data, default_task_name):
             else: console.print("  [red]Choice out of range. Try again.[/red]")
         except ValueError: console.print("  [red]Invalid input. Please enter a number.[/red]")
 
-def ask_for_jira(console, jira_client, jira_server, jira_auth):
+def ask_for_jira(console, config):
     while True:
         jira_id_input = Prompt.ask("\n▶️ [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
         
@@ -224,37 +225,55 @@ def ask_for_jira(console, jira_client, jira_server, jira_auth):
             return None, None
 
         if jira_id_input == '?':
-            with console.status("[yellow]Fetching recent JIRA tickets...[/yellow]"):
-                jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
-                recent_issues = search_jira_issues(jql_query, jira_server, jira_auth, max_results=5)
+            all_recent_issues = []
+            with console.status("[yellow]Fetching recent JIRA tickets from all instances...[/yellow]"):
+                for name, jira_config in config["jira_instances"].items():
+                    jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
+                    issues = search_jira_issues(jql_query, jira_config['server'], jira_config['auth'], max_results=5)
+                    for issue in issues:
+                        issue['instance_name'] = name
+                    all_recent_issues.extend(issues)
             
-            if not recent_issues:
-                console.print("  [yellow]No recent or in-progress tickets found.[/yellow]")
+            if not all_recent_issues:
+                console.print("  [yellow]No recent or in-progress tickets found across all instances.[/yellow]")
                 continue
 
             console.print("  [bold]Select a recent ticket:[/bold]")
-            for i, issue in enumerate(recent_issues):
-                console.print(f"    [magenta][{i+1:>2}][/magenta] {issue['key']}: {issue['fields']['summary']}")
+            for i, issue in enumerate(all_recent_issues):
+                console.print(f"    [magenta][{i+1:>2}][/magenta] ({issue['instance_name']}) {issue['key']}: {issue['fields']['summary']}")
             
             while True:
                 try:
                     choice = int(Prompt.ask("  [bold]Ticket number[/bold] (or 0 to go back)"))
                     if choice == 0:
                         break
-                    if 1 <= choice <= len(recent_issues):
-                        jira_id = recent_issues[choice - 1]['key']
-                        jira_issue = jira_client.issue(jira_id)
-                        return jira_issue, jira_id
+                    if 1 <= choice <= len(all_recent_issues):
+                        selected_issue_data = all_recent_issues[choice - 1]
+                        jira_id = selected_issue_data['key']
+                        instance_name = selected_issue_data['instance_name']
+                        jira_client = config['jira_instances'][instance_name]['client']
+                        return jira_client.issue(jira_id), jira_id
                     else:
                         console.print("  [red]Choice out of range.[/red]")
                 except ValueError:
                     console.print("  [red]Please enter a number.[/red]")
             
-            if not jira_issue: # If user chose 0
+            if 'jira_id' not in locals():
                 continue
 
-        with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
-            search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', jira_server, jira_auth, max_results=1)
+        ticket_prefix = jira_id_input.split('-')[0].upper()
+        target_instance = None
+        for name, jira_config in config["jira_instances"].items():
+            if ticket_prefix in jira_config['keys']:
+                target_instance = jira_config
+                break
+        
+        if not target_instance:
+            console.print(f"  ❌ [red]No JIRA instance configured for project key '{ticket_prefix}'. Check your .env file.[/red]")
+            continue
+
+        with console.status(f"[yellow]Verifying {jira_id_input.upper()} on '{target_instance['name']}' instance...[/yellow]"):
+            search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', target_instance['server'], target_instance['auth'], max_results=1)
         
         if search_results:
             jira_issue_candidate_data = search_results[0]
@@ -262,13 +281,13 @@ def ask_for_jira(console, jira_client, jira_server, jira_auth):
             
             if Confirm.ask("Is this the correct ticket?", default=True):
                 jira_id = jira_issue_candidate_data['key']
-                jira_issue = jira_client.issue(jira_id)
-                return jira_issue, jira_id
+                jira_client = target_instance['client']
+                return jira_client.issue(jira_id), jira_id
             else:
                 console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
                 continue
         else:
-            console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found. Try again.[/red]")
+            console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found on the '{target_instance['name']}' instance.[/red]")
 
 def ask_for_comment(console):
     return Prompt.ask("\n▶️ [bold]Anything to add (comment)?[/bold]")
@@ -337,15 +356,13 @@ def setup_clients(console):
     config = {
         "moco_subdomain": os.getenv("MOCO_SUBDOMAIN"),
         "moco_api_key": os.getenv("MOCO_API_KEY"),
-        "jira_server": os.getenv("JIRA_SERVER"),
-        "jira_user_email": os.getenv("JIRA_USER_EMAIL"),
-        "jira_api_token": os.getenv("JIRA_API_TOKEN"),
+        "question_order": os.getenv("QUESTION_ORDER", "project,task,jira,comment,time").split(','),
         "default_task_name": os.getenv("DEFAULT_TASK_NAME"),
-        "question_order": os.getenv("QUESTION_ORDER", "project,task,jira,comment,time").split(',')
+        "jira_instances": {}
     }
 
-    if not all([config[k] for k in ["moco_subdomain", "moco_api_key", "jira_server", "jira_user_email", "jira_api_token"]]):
-        console.print("[bold red]❌ Error: One or more required environment variables are missing.[/bold red]")
+    if not all([config["moco_subdomain"], config["moco_api_key"]]):
+        console.print("[bold red]❌ Error: Moco configuration is missing in your .env file.[/bold red]")
         sys.exit(1)
 
     with console.status("[yellow]Connecting to services...[/yellow]"):
@@ -360,17 +377,38 @@ def setup_clients(console):
             console.print(f"❌ [bold red]Moco connection failed:[/bold red] {e}")
             sys.exit(1)
 
-        try:
-            config["jira_client"] = JIRA(server=config["jira_server"], basic_auth=(config["jira_user_email"], config["jira_api_token"]))
-            config["jira_client"].myself()
-            console.print("✅ [green]JIRA connection successful.[/green]")
-        except JIRAError as e:
-            console.print(f"❌ [bold red]JIRA connection failed:[/bold red] {e.text}")
-            sys.exit(1)
+        jira_instance_names = [name.strip() for name in os.getenv("JIRA_INSTANCES", "").split(',') if name.strip()]
+        if not jira_instance_names:
+            console.print("[yellow]No JIRA instances configured. JIRA features will be disabled.[/yellow]")
+        
+        for name in jira_instance_names:
+            key_prefix = f"JIRA_{name.upper()}_"
+            server = os.getenv(f"{key_prefix}SERVER")
+            email = os.getenv(f"{key_prefix}USER_EMAIL")
+            token = os.getenv(f"{key_prefix}API_TOKEN")
+            keys = [key.strip().upper() for key in os.getenv(f"{key_prefix}PROJECT_KEYS", "").split(',')]
+
+            if not all([server, email, token, keys]):
+                console.print(f"❌ [bold red]Missing configuration for JIRA instance '{name}'. Check your .env file.[/bold red]")
+                sys.exit(1)
+            
+            try:
+                client = JIRA(server=server, basic_auth=(email, token))
+                client.myself()
+                config["jira_instances"][name] = {
+                    "name": name,
+                    "server": server,
+                    "auth": HTTPBasicAuth(email, token),
+                    "client": client,
+                    "keys": keys
+                }
+                console.print(f"✅ [green]JIRA connection successful for '{name}'.[/green]")
+            except JIRAError as e:
+                console.print(f"❌ [bold red]JIRA connection failed for '{name}':[/bold red] {e.text}")
+                sys.exit(1)
             
     config["moco_session"] = requests.Session()
     config["moco_session"].headers.update({'Authorization': f'Bearer {config["moco_api_key"]}', 'Content-Type': 'application/json'})
-    config["jira_auth"] = HTTPBasicAuth(config["jira_user_email"], config["jira_api_token"])
 
     return config
 
@@ -399,7 +437,6 @@ def main():
     while True:
         entry_data = {}
         
-        # Fetch projects once at the start of an entry
         with console.status("[yellow]Fetching projects...[/yellow]"):
             all_assigned_projects = moco_get(config["moco_session"], config["moco_subdomain"], "projects/assigned")
             assigned_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
@@ -418,14 +455,16 @@ def main():
                 if "selected_project" not in entry_data: console.print("[red]Error: Project must be selected before task.[/red]"); break
                 entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"])
             elif step == "jira":
-                entry_data["jira_issue"], entry_data["jira_id"] = ask_for_jira(console, config["jira_client"], config["jira_server"], config["jira_auth"])
+                if config["jira_instances"]:
+                    entry_data["jira_issue"], entry_data["jira_id"] = ask_for_jira(console, config)
+                else: # Skip if no JIRA instances are configured
+                    entry_data["jira_issue"], entry_data["jira_id"] = None, None
             elif step == "comment":
                 entry_data["comment"] = ask_for_comment(console)
             elif step == "time":
                 start_time, end_time, duration = ask_for_time(console, last_activity)
                 entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
         
-        # Build description and show summary
         start_time_hhmm = entry_data.get('start_time', 'N/A').replace(':', '')
         end_time_hhmm = entry_data.get('end_time', 'N/A').replace(':', '')
         time_part = f"({start_time_hhmm}-{end_time_hhmm})"
@@ -457,7 +496,8 @@ def main():
                     try:
                         jira_comment = f"{entry_data.get('comment', '')} {time_part}".strip()
                         start_dt = datetime.strptime(entry_data['start_time'], "%H:%M")
-                        config["jira_client"].add_worklog(
+                        jira_client = entry_data["jira_issue"]._session.client # Get the correct client from the issue object
+                        jira_client.add_worklog(
                             issue=entry_data["jira_issue"], timeSpentSeconds=int(entry_data["duration_hours"]*3600),
                             comment=jira_comment, started=datetime.combine(work_date, start_dt.time()).astimezone()
                         )
@@ -469,7 +509,6 @@ def main():
         last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
-            # After finishing, re-display the final list of entries for the day
             display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
             break
             
