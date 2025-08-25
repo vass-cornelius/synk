@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.text import Text
+from rich.table import Table
 
 # --- API HELPER FUNCTIONS ---
 def moco_get(session, moco_subdomain, endpoint, params=None):
@@ -99,6 +100,56 @@ def parse_and_validate_time_input(time_str):
     return None
 
 # --- WORKFLOW STEP FUNCTIONS ---
+def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
+    """Fetches and displays all entries for a given date."""
+    console.print(f"\n[bold]🗓️  Entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+    with console.status("[yellow]Fetching existing entries...[/yellow]"):
+        params = {'user_id': user_id, 'from': work_date.isoformat(), 'to': work_date.isoformat()}
+        activities = moco_get(session, moco_subdomain, "activities", params=params)
+
+    if not activities:
+        console.print("  [grey53]No entries found for this date.[/grey53]")
+        return
+
+    parsed_activities = []
+    for activity in activities:
+        description = activity.get("description", "")
+        match = re.search(r'\((\d{4})-(\d{4})\)', description)
+        if match:
+            start_time_hhmm = match.group(1)
+            start_time_for_sort = f"{start_time_hhmm[:2]}:{start_time_hhmm[2:]}"
+            parsed_activities.append({**activity, 'start_time_for_sort': start_time_for_sort})
+        else:
+            # Add activities without a time part to sort them at the end
+            parsed_activities.append({**activity, 'start_time_for_sort': "99:99"})
+
+    # Sort activities by the parsed start time
+    parsed_activities.sort(key=lambda x: x['start_time_for_sort'])
+
+    table = Table(show_header=True, header_style="bold magenta", border_style="dim")
+    table.add_column("Time", style="cyan", width=15, no_wrap=True)
+    table.add_column("Project")
+    table.add_column("Task")
+    table.add_column("Description", no_wrap=False)
+
+    for activity in parsed_activities:
+        description = activity.get("description", "")
+        match = re.search(r'\((\d{4})-(\d{4})\)', description)
+        time_str = ""
+        if match:
+            start, end = match.groups()
+            time_str = f"{start[:2]}:{start[2:]} - {end[:2]}:{end[2:]}"
+        
+        project_name = activity.get('project', {}).get('name', 'N/A')
+        task_name = activity.get('task', {}).get('name', 'N/A').split('|')[0].strip()
+        
+        # Remove the time part from the description for cleaner display
+        desc_display = re.sub(r'\s*\(\d{4}-\d{4}\)$', '', description).strip()
+
+        table.add_row(time_str, project_name, task_name, desc_display)
+    
+    console.print(table)
+
 def ask_for_project(console, assigned_projects, last_activity):
     has_last_project_default = False
     if last_activity:
@@ -225,11 +276,9 @@ def ask_for_comment(console):
 def ask_for_time(console, last_activity):
     last_end_time = None
     if last_activity:
-        # Look for the new (hhmm-hhmm) format
         match = re.search(r'\((\d{4})-(\d{4})\)', last_activity.get("description", ""))
         if match:
             end_time_hhmm = match.group(2)
-            # Convert back to hh:mm for display and further processing
             last_end_time = f"{end_time_hhmm[:2]}:{end_time_hhmm[2:]}"
 
     start_prompt = Text("\n▶️ ", style="cyan", end="")
@@ -343,7 +392,7 @@ def main():
         except ValueError:
             console.print("  [red]Invalid date format. Please try again.[/red]")
             
-    console.print(f"\n✅ Tracking time for: [bold yellow]{work_date.strftime('%A, %Y-%m-%d')}[/bold yellow]")
+    display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
     last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
@@ -420,6 +469,8 @@ def main():
         last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
+            # After finishing, re-display the final list of entries for the day
+            display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
             break
             
     console.print("\n[bold blue]Time tracking finished. Goodbye! 👋[/bold blue]")
