@@ -225,9 +225,12 @@ def ask_for_comment(console):
 def ask_for_time(console, last_activity):
     last_end_time = None
     if last_activity:
-        match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', last_activity.get("description", ""))
+        # Look for the new (hhmm-hhmm) format
+        match = re.search(r'\((\d{4})-(\d{4})\)', last_activity.get("description", ""))
         if match:
-            last_end_time = match.group(2)
+            end_time_hhmm = match.group(2)
+            # Convert back to hh:mm for display and further processing
+            last_end_time = f"{end_time_hhmm[:2]}:{end_time_hhmm[2:]}"
 
     start_prompt = Text("\n▶️ ", style="cyan", end="")
     start_prompt.append("When did you start?", style="bold")
@@ -374,7 +377,9 @@ def main():
                 entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
         
         # Build description and show summary
-        time_part = f"({entry_data.get('start_time', 'N/A')}-{entry_data.get('end_time', 'N/A')})"
+        start_time_hhmm = entry_data.get('start_time', 'N/A').replace(':', '')
+        end_time_hhmm = entry_data.get('end_time', 'N/A').replace(':', '')
+        time_part = f"({start_time_hhmm}-{end_time_hhmm})"
         desc_parts = [part for part in [entry_data.get('jira_id'), entry_data.get('comment'), time_part] if part]
         description = " ".join(desc_parts)
 
