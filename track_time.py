@@ -66,7 +66,7 @@ def get_last_activity(session, moco_subdomain, user_id, for_date):
 
 def search_jira_issues(jql, jira_server, auth, max_results=5):
     """Searches for JIRA issues using the REST API."""
-    url = f"{jira_server}/rest/api/3/search/jql"
+    url = f"{jira_server}/rest/api/3/search"
     headers = {"Accept": "application/json"}
     query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
     
@@ -78,9 +78,31 @@ def search_jira_issues(jql, jira_server, auth, max_results=5):
         Console().print(f"[bold red]❌ JIRA Search Error:[/bold red] {e}")
         return []
 
-def validate_time_format(time_str):
-    """Check if a string is in HH:mm format."""
-    return re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", time_str) is not None
+def parse_and_validate_time_input(time_str):
+    """
+    Parses and validates a time string in (h)hmm format.
+    Returns a "HH:mm" string if valid, otherwise None.
+    """
+    if not re.fullmatch(r"\d{3,4}", time_str):
+        return None
+
+    if len(time_str) == 3:
+        # Pad with a leading zero, e.g., "800" -> "0800"
+        time_str = "0" + time_str
+
+    hour_str = time_str[:2]
+    minute_str = time_str[2:]
+
+    try:
+        hour = int(hour_str)
+        minute = int(minute_str)
+
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+        else:
+            return None
+    except ValueError:
+        return None
 
 # --- SETUP AND VERIFICATION ---
 def setup_clients(console):
@@ -297,32 +319,39 @@ def main():
         if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
         
         while True:
-            start_time_str = Prompt.ask(start_prompt)
-            if start_time_str.lower() == 'last' and last_end_time:
+            start_time_input = Prompt.ask(start_prompt)
+            if start_time_input.lower() == 'last' and last_end_time:
                 start_time_str = last_end_time; break
-            if start_time_str.lower() == 'last' and not last_end_time:
+            if start_time_input.lower() == 'last' and not last_end_time:
                 console.print(f"  [yellow]No entries on {work_date.isoformat()} to start after.[/yellow]")
-            elif validate_time_format(start_time_str): break
-            else: console.print("  [red]Invalid format. Use HH:mm or 'last'.[/red]")
+            
+            parsed_time = parse_and_validate_time_input(start_time_input)
+            if parsed_time:
+                start_time_str = parsed_time
+                break
+            else:
+                console.print("  [red]Invalid format. Use (h)hmm (e.g., 800 or 1730) or 'last'.[/red]")
 
         end_prompt = Text("\n7. ", style="cyan", end="")
         end_prompt.append(f"When did you finish? (start: {start_time_str})", style="bold")
-        end_prompt.append(" (HH:mm or decimal hours)")
+        end_prompt.append(" ((h)hmm or decimal hours)")
         
         while True:
             end_input = Prompt.ask(end_prompt)
             start_time_dt = datetime.strptime(start_time_str, "%H:%M")
-            if validate_time_format(end_input):
-                end_time_dt = datetime.strptime(end_input, "%H:%M")
+            
+            parsed_end_time = parse_and_validate_time_input(end_input)
+            if parsed_end_time:
+                end_time_dt = datetime.strptime(parsed_end_time, "%H:%M")
                 if end_time_dt <= start_time_dt: console.print("  [red]End time must be after start time.[/red]"); continue
                 duration_hours = (end_time_dt - start_time_dt).total_seconds() / 3600
-                end_time_str = end_input; break
+                end_time_str = parsed_end_time; break
             else:
                 try:
                     duration_hours = float(end_input)
                     if duration_hours <= 0: console.print("  [red]Duration must be positive.[/red]"); continue
                     end_time_str = (start_time_dt + timedelta(hours=duration_hours)).strftime("%H:%M"); break
-                except ValueError: console.print("  [red]Invalid format.[/red]")
+                except ValueError: console.print("  [red]Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).[/red]")
 
         customer_name_summary = selected_project_data.get('customer',{}).get('name', 'No Customer')
         time_part = f"({start_time_str}-{end_time_str})"
