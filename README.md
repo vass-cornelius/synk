@@ -43,7 +43,6 @@ The installer will check for dependencies, help you create your configuration fi
 4.  Press **Enter**. Your terminal is now inside the Synk folder.
 5.  Run the installer with this command:
     ```bash
-    pip3 install -r requirements.txt
     python3 install.py
     ```
 6.  The installer will guide you through the rest of the setup.
