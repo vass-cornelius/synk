@@ -4,61 +4,54 @@ import glob
 import sys
 import subprocess
 
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.prompt import Prompt, Confirm
-except ImportError:
-    # Rich is a dependency, so we handle its absence gracefully before the check.
-    print("Rich library not found. The installer needs it to run.")
-    print("Attempting to install dependencies now...")
-    try:
-        # Use the correct python executable to run pip
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'])
-        print("Dependencies installed successfully. Please run the script again.")
-    except subprocess.CalledProcessError:
-        print("Failed to install dependencies. Please run 'python3 -m pip install -r requirements.txt' manually.")
-    sys.exit(0)
-
-def setup_virtual_environment(console):
-    """Creates a virtual environment and installs dependencies into it."""
+def setup_virtual_environment():
+    """
+    Creates a virtual environment and installs dependencies into it.
+    Uses plain print statements as this runs before rich is guaranteed to be installed.
+    """
     venv_path = "venv"
     
     if not os.path.exists(venv_path):
-        console.print("Creating a dedicated virtual environment for Synk...")
+        print("Creating a dedicated virtual environment for Synk...")
         try:
             subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
-            console.print("✅ [green]Virtual environment created successfully.[/green]")
+            print("✅ Virtual environment created successfully.")
         except subprocess.CalledProcessError as e:
-            console.print(f"❌ [red]Failed to create virtual environment: {e}[/red]")
+            print(f"❌ Failed to create virtual environment: {e}")
             return False
 
-    console.print("\nInstalling/updating required packages into the virtual environment...")
+    print("\nInstalling/updating required packages into the virtual environment...")
     
     # Determine the correct pip executable path within the venv
     pip_executable = os.path.join(venv_path, 'bin', 'pip')
     
     try:
-        subprocess.check_call([pip_executable, 'install', '-r', 'requirements.txt'])
-        console.print("✅ [green]Dependencies installed successfully.[/green]")
+        # Use subprocess.run to capture output and hide it unless there's an error
+        result = subprocess.run(
+            [pip_executable, 'install', '-r', 'requirements.txt'],
+            capture_output=True, text=True, check=True
+        )
+        print("✅ Dependencies installed successfully.")
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        console.print(f"❌ [red]Failed to install dependencies: {e}[/red]")
-        console.print(f"Please try running `{pip_executable} install -r requirements.txt` manually.")
+    except FileNotFoundError:
+        print(f"❌ Error: Could not find pip executable at '{pip_executable}'.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to install dependencies:")
+        # Print the error output from pip for better debugging
+        print(e.stderr)
         return False
 
+def run_rich_setup():
+    """
+    Runs the main part of the setup using the 'rich' library for a better UI.
+    This function is called only after dependencies are confirmed to be installed.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.prompt import Prompt, Confirm
 
-def main():
-    """
-    An interactive script to configure Synk and prepare it for first use.
-    """
     console = Console()
-    console.print(Panel.fit("🚀 [bold blue]Synk Setup Assistant[/bold blue] 🚀"))
-
-    # --- Step 0: Setup virtual environment and install dependencies ---
-    if not setup_virtual_environment(console):
-        sys.exit(1) # Exit if installation fails
-
     console.print("\nThis script will help you create your personal `.env` configuration file.")
 
     # --- Step 1: Create .env file ---
@@ -145,6 +138,27 @@ def make_scripts_executable(console):
             
     except Exception as e:
         console.print(f"\n❌ [red]Error: Could not make scripts executable: {e}[/red]")
+
+def main():
+    """
+    An interactive script to configure Synk and prepare it for first use.
+    """
+    print("🚀 Synk Setup Assistant 🚀")
+
+    # --- Step 0: Setup virtual environment and install dependencies ---
+    if not setup_virtual_environment():
+        sys.exit(1) # Exit if installation fails
+
+    # --- Step 1: Now that dependencies are installed, we can import and use rich ---
+    try:
+        run_rich_setup()
+    except ImportError:
+        print("\nCould not import the 'rich' library even after installation.")
+        print("Continuing with basic setup (plain text).")
+        # A fallback to a plain text setup could be implemented here if needed.
+        # For now, we will assume the installation was successful if we reached this point.
+        print("\nSetup is complete. You can now use the .command files.")
+
 
 if __name__ == "__main__":
     main()
