@@ -50,7 +50,7 @@ def get_last_activity(session, moco_subdomain, user_id, for_date):
 
 def search_jira_issues(jql, jira_server, auth, max_results=5):
     """Searches for JIRA issues using the REST API."""
-    url = f"{jira_server}/rest/api/3/search"
+    url = f"{jira_server}/rest/api/3/search/jql"
     headers = {"Accept": "application/json"}
     query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
     
@@ -133,6 +133,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     
     console.print(table)
 
+
 def ask_for_project(console, assigned_projects, last_activity):
     has_last_project_default = False
     if last_activity:
@@ -204,7 +205,7 @@ def ask_for_jira(console, config):
         jira_id_input = Prompt.ask("\n▶️ [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
         
         if not jira_id_input:
-            return None, None
+            return None, None, None
 
         if jira_id_input == '?':
             all_recent_issues = []
@@ -234,7 +235,7 @@ def ask_for_jira(console, config):
                         jira_id = selected_issue_data['key']
                         instance_name = selected_issue_data['instance_name']
                         jira_client = config['jira_instances'][instance_name]['client']
-                        return jira_client.issue(jira_id), jira_id
+                        return jira_client.issue(jira_id), jira_id, jira_client
                     else:
                         console.print("  [red]Choice out of range.[/red]")
                 except ValueError:
@@ -264,7 +265,7 @@ def ask_for_jira(console, config):
             if Confirm.ask("Is this the correct ticket?", default=True):
                 jira_id = jira_issue_candidate_data['key']
                 jira_client = target_instance['client']
-                return jira_client.issue(jira_id), jira_id
+                return jira_client.issue(jira_id), jira_id, jira_client
             else:
                 console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
                 continue
@@ -438,9 +439,9 @@ def main():
                 entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"])
             elif step == "jira":
                 if config["jira_instances"]:
-                    entry_data["jira_issue"], entry_data["jira_id"] = ask_for_jira(console, config)
+                    entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = ask_for_jira(console, config)
                 else: # Skip if no JIRA instances are configured
-                    entry_data["jira_issue"], entry_data["jira_id"] = None, None
+                    entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = None, None, None
             elif step == "comment":
                 entry_data["comment"] = ask_for_comment(console)
             elif step == "time":
@@ -478,7 +479,7 @@ def main():
                     try:
                         jira_comment = f"{entry_data.get('comment', '')} {time_part}".strip()
                         start_dt = datetime.strptime(entry_data['start_time'], "%H:%M")
-                        jira_client = entry_data["jira_issue"]._session.client # Get the correct client from the issue object
+                        jira_client = entry_data["jira_client"]
                         jira_client.add_worklog(
                             issue=entry_data["jira_issue"], timeSpentSeconds=int(entry_data["duration_hours"]*3600),
                             comment=jira_comment, started=datetime.combine(work_date, start_dt.time()).astimezone()
