@@ -55,20 +55,34 @@ After running the installer, you can start using Synk by double-clicking the com
 * **`start-watcher.command`**: Silently starts the background reminder process.
 * **`stop-watcher.command`**: Stops the background reminder process.
 
+Alternatively, you can run the following in your terminal (inside the installation folder):
+```bash
+./venv/bin/python track_time.py
+```
 ---
 
 ## Manual Installation (Advanced)
 
-If you prefer to set things up manually, follow these steps instead of running the installer.
+If you prefer to set things up manually, follow these steps instead of running the `install.py` script.
 
-1.  **Install Dependencies**:
+1. **Create a Virtual Environment**: This creates a safe, isolated environment for Synk's dependencies and avoids conflicts with your system's Python.
     ```bash
-    pip3 install -r requirements.txt
+    python3 -m venv venv
     ```
-2.  **Create Configuration File**:
-    * Rename `.env.example` to `.env`.
-    * Open the `.env` file and fill in your Moco and JIRA credentials.
-3.  **Make Scripts Executable**:
+2.  **Activate the Virtual Environment**: You must activate the environment before installing packages.:
+    ```bash
+    source venv/bin/activate
+    ```
+    _Your terminal prompt should now show (venv) at the beginning._
+3.  **Install Dependencies**: Install all the required packages inside the active environment.
+    ```bash
+    pip install -r requirements.txt
+    ```
+    _Once you're done, you can leave the virtual environment by typing `deactivate`._
+4.  **Create Configuration File**:
+    * Rename the .env.example file to .env.
+    * Open the `.env` file and fill in your Moco and JIRA credentials. Pay close attention to the new multi-JIRA format.
+6.  **Make Scripts Executeable**:
     ```bash
     chmod +x *.command
     ```
