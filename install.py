@@ -20,23 +20,32 @@ except ImportError:
         print("Failed to install dependencies. Please run 'python3 -m pip install -r requirements.txt' manually.")
     sys.exit(0)
 
-def install_dependencies(console):
-    """Asks the user to install or update dependencies from requirements.txt."""
-    console.print("This tool requires several Python packages to run correctly.")
-    if Confirm.ask("Do you want to install/update them now from `requirements.txt`?", default=True):
-        console.print("Installing dependencies...")
+def setup_virtual_environment(console):
+    """Creates a virtual environment and installs dependencies into it."""
+    venv_path = "venv"
+    
+    if not os.path.exists(venv_path):
+        console.print("Creating a dedicated virtual environment for Synk...")
         try:
-            # Use sys.executable to ensure we use the pip associated with the current python interpreter
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'])
-            console.print("✅ [green]Dependencies installed successfully.[/green]")
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            console.print(f"❌ [red]Failed to install dependencies: {e}[/red]")
-            console.print(f"Please run `{sys.executable} -m pip install -r requirements.txt` manually and then run this script again.")
+            subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+            console.print("✅ [green]Virtual environment created successfully.[/green]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"❌ [red]Failed to create virtual environment: {e}[/red]")
             return False
-    else:
-        console.print("[yellow]Skipping dependency installation. The tool may not run correctly.[/yellow]")
-        return True # Allow the user to proceed at their own risk
+
+    console.print("\nInstalling/updating required packages into the virtual environment...")
+    
+    # Determine the correct pip executable path within the venv
+    pip_executable = os.path.join(venv_path, 'bin', 'pip')
+    
+    try:
+        subprocess.check_call([pip_executable, 'install', '-r', 'requirements.txt'])
+        console.print("✅ [green]Dependencies installed successfully.[/green]")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        console.print(f"❌ [red]Failed to install dependencies: {e}[/red]")
+        console.print(f"Please try running `{pip_executable} install -r requirements.txt` manually.")
+        return False
 
 
 def main():
@@ -46,8 +55,8 @@ def main():
     console = Console()
     console.print(Panel.fit("🚀 [bold blue]Synk Setup Assistant[/bold blue] 🚀"))
 
-    # --- Step 0: Install dependencies ---
-    if not install_dependencies(console):
+    # --- Step 0: Setup virtual environment and install dependencies ---
+    if not setup_virtual_environment(console):
         sys.exit(1) # Exit if installation fails
 
     console.print("\nThis script will help you create your personal `.env` configuration file.")

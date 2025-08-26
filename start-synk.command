@@ -1,4 +1,4 @@
 #!/bin/bash
-# This script runs the main time-tracking tool
-cd "$(dirname "$0")" # Change directory to where the script is located
-python3 track_time.py
+# This script runs the main time-tracking tool using the virtual environment
+cd "$(dirname "$0")"
+./venv/bin/python track_time.py
