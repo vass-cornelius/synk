@@ -2,24 +2,7 @@
 import os
 import re
 import sys
-import pkg_resources
 from datetime import datetime, timedelta, date
-
-# --- DEPENDENCY CHECK ---
-required_packages = ['requests', 'jira', 'python-dotenv', 'rich']
-missing_packages = []
-for package in required_packages:
-    try:
-        pkg_resources.get_distribution(package)
-    except pkg_resources.DistributionNotFound:
-        missing_packages.append(package)
-
-if missing_packages:
-    print("❌ Error: Required Python libraries are missing.")
-    print("Please install them by running this command in your terminal:")
-    install_command = f"pip3 install {' '.join(missing_packages)}"
-    print(f"\n  {install_command}\n")
-    sys.exit(1)
 
 # --- Rich and other library imports ---
 import requests
@@ -67,7 +50,7 @@ def get_last_activity(session, moco_subdomain, user_id, for_date):
 
 def search_jira_issues(jql, jira_server, auth, max_results=5):
     """Searches for JIRA issues using the REST API."""
-    url = f"{jira_server}/rest/api/3/search/jql"
+    url = f"{jira_server}/rest/api/3/search"
     headers = {"Accept": "application/json"}
     query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
     
@@ -127,7 +110,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     parsed_activities.sort(key=lambda x: x['start_time_for_sort'])
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
-    table.add_column("Time", style="cyan", width=15)
+    table.add_column("Time", style="cyan", width=12)
     table.add_column("Project")
     table.add_column("Task")
     table.add_column("Description", no_wrap=False)
