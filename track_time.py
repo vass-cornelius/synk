@@ -110,7 +110,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     parsed_activities.sort(key=lambda x: x['start_time_for_sort'])
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
-    table.add_column("Time", style="cyan", width=12)
+    table.add_column("Time", style="cyan", width=15)
     table.add_column("Project")
     table.add_column("Task")
     table.add_column("Description", no_wrap=False)
@@ -132,7 +132,6 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
         table.add_row(time_str, project_name, task_name, desc_display)
     
     console.print(table)
-
 
 def ask_for_project(console, assigned_projects, last_activity):
     has_last_project_default = False
