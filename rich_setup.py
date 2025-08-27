@@ -88,6 +88,20 @@ def make_scripts_executable(console):
     try:
         console.print("\nMaking script files executable...")
         command_files = glob.glob('*.command')
-    except Exception as e:
-        console.print(f"\n❌ [red]Error: Could not make scripts executable: {e}[/red]")
-run_rich_setup()
+        if not command_files:
+            console.print("[yellow]No `.command` files found to make executable.[/yellow]")
+            return
+
+        for file_path in command_files:
+            try:
+                current_permissions = os.stat(file_path).st_mode
+                os.chmod(file_path, current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                console.print(f"  ✅ [green]Made `{file_path}` executable.[/green]")
+            except (IOError, OSError) as e:
+                console.print(f"  ❌ [red]Could not make `{file_path}` executable: {e}[/red]")
+
+    except Exception as e: # Catch any other unexpected errors during glob
+        console.print(f"\n❌ [red]An unexpected error occurred while finding .command files: {e}[/red]")
+
+if __name__ == "__main__":
+    run_rich_setup()

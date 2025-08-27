@@ -1,34 +1,44 @@
 import os
-import stat
-import glob
 import sys
 import subprocess
+from pathlib import Path
+
+# --- CONSTANTS ---
+VENV_DIR = "venv"
+REQUIREMENTS_FILE = "requirements.txt"
+RICH_SETUP_SCRIPT = "rich_setup.py"
+
+
+def _get_executable_path(venv_path: Path, name: str) -> Path:
+    """Returns the platform-specific path to an executable in the venv."""
+    if sys.platform == "win32":
+        return venv_path / "Scripts" / f"{name}.exe"
+    return venv_path / "bin" / name
+
 
 def setup_virtual_environment():
     """
     Creates a virtual environment and installs dependencies into it.
     Uses plain print statements as this runs before rich is guaranteed to be installed.
+    Returns the path to the venv directory on success, None on failure.
     """
-    venv_path = "venv"
+    venv_path = Path(VENV_DIR)
     
-    if not os.path.exists(venv_path):
-        print("Creating a dedicated virtual environment for Synk...")
+    if not venv_path.exists():
+        print(f"Creating a dedicated virtual environment in './{VENV_DIR}'...")
         try:
-            subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+            subprocess.check_call([sys.executable, '-m', 'venv', str(venv_path)])
             print("✅ Virtual environment created successfully.")
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to create virtual environment: {e}")
             return None
 
     print("\nInstalling/updating required packages into the virtual environment...")
-    
-    # Determine the correct pip executable path within the venv
-    pip_executable = os.path.join(venv_path, 'bin', 'pip')
+    pip_executable = _get_executable_path(venv_path, "pip")
     
     try:
-        # Use subprocess.run to capture output and hide it unless there's an error
-        result = subprocess.run(
-            [pip_executable, 'install', '-r', 'requirements.txt'],
+        subprocess.run(
+            [str(pip_executable), 'install', '-r', REQUIREMENTS_FILE],
             capture_output=True, text=True, check=True
         )
         print("✅ Dependencies installed successfully.")
@@ -40,7 +50,7 @@ def setup_virtual_environment():
         print(f"❌ Failed to install dependencies:")
         # Print the error output from pip for better debugging
         print(e.stderr)
-        return False
+        return None
 
 def main():
     """
@@ -54,15 +64,15 @@ def main():
         sys.exit(1) # Exit if installation fails
 
     # After successful venv setup, execute rich_setup.py using the venv's python interpreter
-    pip_executable = os.path.join(venv_path, 'bin', 'python')    
+    python_executable = _get_executable_path(venv_path, "python")
     try:
-        subprocess.check_call([pip_executable, 'rich_setup.py'])
+        subprocess.check_call([str(python_executable), RICH_SETUP_SCRIPT])
         print("\n✅ Rich setup executed successfully within the virtual environment.")
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ Failed to execute rich_setup.py: {e}")
+        print(f"\n❌ Failed to execute {RICH_SETUP_SCRIPT}: {e}")
         sys.exit(1)
     except FileNotFoundError:
-        print(f"❌ Error: Could not find python executable at '{pip_executable}'.")
+        print(f"❌ Error: Could not find python executable at '{python_executable}'.")
         sys.exit(1)
 
 

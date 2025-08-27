@@ -3,7 +3,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, date
-
+from typing import Optional
 # --- Rich and other library imports ---
 import requests
 from requests.auth import HTTPBasicAuth
@@ -15,6 +15,11 @@ from rich.prompt import Prompt, Confirm
 from rich.text import Text
 from rich.table import Table
 
+# --- CUSTOM EXCEPTION ---
+class SynkError(Exception):
+    """Custom exception for application-specific errors to allow for graceful exit."""
+    pass
+
 # --- API HELPER FUNCTIONS ---
 def moco_get(session, moco_subdomain, endpoint, params=None):
     """Generic GET request handler for Moco API."""
@@ -24,8 +29,7 @@ def moco_get(session, moco_subdomain, endpoint, params=None):
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        Console().print(f"[bold red]❌ Moco API Error:[/bold red] {e}")
-        sys.exit(1)
+        raise SynkError(f"Moco API Error on GET {endpoint}: {e}") from e
 
 def moco_post(session, moco_subdomain, endpoint, data):
     """Generic POST request handler for Moco API."""
@@ -35,8 +39,8 @@ def moco_post(session, moco_subdomain, endpoint, data):
         response.raise_for_status()
         return response
     except requests.exceptions.RequestException as e:
-        Console().print(f"[bold red]❌ Moco API Error creating entry:[/bold red] {e.response.text if e.response else e}")
-        sys.exit(1)
+        error_text = e.response.text if e.response else str(e)
+        raise SynkError(f"Moco API Error creating entry: {error_text}") from e
 
 def get_last_activity(session, moco_subdomain, user_id, for_date):
     """Fetch the entire object of the last recorded entry for the user on a specific date."""
@@ -59,23 +63,22 @@ def search_jira_issues(jql, jira_server, auth, max_results=5):
         response.raise_for_status()
         return response.json().get('issues', [])
     except requests.exceptions.RequestException as e:
-        Console().print(f"[bold red]❌ JIRA Search Error:[/bold red] {e}")
+        # This is a non-fatal error during an interactive search, so just printing is fine.
+        Console().print(f"[bold yellow]⚠️ JIRA Search Warning:[/bold yellow] {e}")
         return []
 
-def parse_and_validate_time_input(time_str):
+def parse_and_validate_time_input(time_str: str) -> Optional[str]:
     """
     Parses and validates a time string in (h)hmm format.
     Returns a "HH:mm" string if valid, otherwise None.
     """
-    if not re.fullmatch(r"\d{3,4}", time_str):
+    if not time_str.isdigit() or not 3 <= len(time_str) <= 4:
         return None
 
-    if len(time_str) == 3:
-        time_str = "0" + time_str
+    time_str = time_str.zfill(4)  # Pad with leading zero if needed, e.g., "800" -> "0800"
 
-    hour_str, minute_str = time_str[:2], time_str[2:]
     try:
-        hour, minute = int(hour_str), int(minute_str)
+        hour, minute = int(time_str[:2]), int(time_str[2:])
         if 0 <= hour <= 23 and 0 <= minute <= 59:
             return f"{hour:02d}:{minute:02d}"
     except ValueError:
@@ -94,20 +97,17 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
         console.print("  [grey53]No entries found for this date.[/grey53]")
         return
 
-    parsed_activities = []
-    for activity in activities:
+    def get_sort_key(activity: dict) -> tuple:
+        """Sort key for activities: time-based entries first, then others by ID."""
         description = activity.get("description", "")
         match = re.search(r'\((\d{4})-(\d{4})\)', description)
         if match:
             start_time_hhmm = match.group(1)
-            start_time_for_sort = f"{start_time_hhmm[:2]}:{start_time_hhmm[2:]}"
-            parsed_activities.append({**activity, 'start_time_for_sort': start_time_for_sort})
-        else:
-            # Add activities without a time part to sort them at the end
-            parsed_activities.append({**activity, 'start_time_for_sort': "99:99"})
+            return (0, f"{start_time_hhmm[:2]}:{start_time_hhmm[2:]}")
+        return (1, activity.get('id')) # Sort activities without time at the end
 
     # Sort activities by the parsed start time
-    parsed_activities.sort(key=lambda x: x['start_time_for_sort'])
+    activities.sort(key=get_sort_key)
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
     table.add_column("Time", style="cyan", width=15)
@@ -116,7 +116,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     table.add_column("Description", no_wrap=False)
 
     total_seconds = 0
-    for activity in parsed_activities:
+    for activity in activities:
         description = activity.get("description", "")
         match = re.search(r'\((\d{4})-(\d{4})\)', description)
         time_str = ""
@@ -143,18 +143,18 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
 
 
 def ask_for_project(console, assigned_projects, last_activity):
-    has_last_project_default = False
+    default_project = None
     if last_activity:
         last_project_id = last_activity.get('project', {}).get('id')
         project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
         if project_to_move:
             assigned_projects.remove(project_to_move)
             assigned_projects.insert(0, project_to_move)
-            has_last_project_default = True
+            default_project = project_to_move
 
     project_prompt = Text("\n▶️ ", style="cyan", end="")
     project_prompt.append("What project did you work on?", style="bold")
-    if has_last_project_default:
+    if default_project:
         default_project = assigned_projects[0]
         customer_name = default_project.get('customer', {}).get('name', 'No Customer')
         project_name = default_project['name']
@@ -168,7 +168,7 @@ def ask_for_project(console, assigned_projects, last_activity):
     while True:
         try:
             choice_input = Prompt.ask("[bold]Project number[/bold]")
-            if has_last_project_default and not choice_input:
+            if default_project and not choice_input:
                 selected_project_data = assigned_projects[0]
                 customer = selected_project_data.get('customer', {}).get('name', 'No Customer')
                 project_name = selected_project_data['name']
@@ -353,8 +353,7 @@ def setup_clients(console):
     }
 
     if not all([config["moco_subdomain"], config["moco_api_key"]]):
-        console.print("[bold red]❌ Error: Moco configuration is missing in your .env file.[/bold red]")
-        sys.exit(1)
+        raise SynkError("Moco configuration is missing in your .env file. Please run install.py again.")
 
     with console.status("[yellow]Connecting to services...[/yellow]"):
         try:
@@ -365,8 +364,7 @@ def setup_clients(console):
             config["moco_user_id"] = response.json()['id']
             console.print("✅ [green]Moco connection successful.[/green]")
         except (requests.exceptions.RequestException, KeyError) as e:
-            console.print(f"❌ [bold red]Moco connection failed:[/bold red] {e}")
-            sys.exit(1)
+            raise SynkError(f"Moco connection failed: {e}") from e
 
         jira_instance_names = [name.strip() for name in os.getenv("JIRA_INSTANCES", "").split(',') if name.strip()]
         if not jira_instance_names:
@@ -380,8 +378,7 @@ def setup_clients(console):
             keys = [key.strip().upper() for key in os.getenv(f"{key_prefix}PROJECT_KEYS", "").split(',')]
 
             if not all([server, email, token, keys]):
-                console.print(f"❌ [bold red]Missing configuration for JIRA instance '{name}'. Check your .env file.[/bold red]")
-                sys.exit(1)
+                raise SynkError(f"Missing configuration for JIRA instance '{name}'. Check your .env file.")
             
             try:
                 client = JIRA(server=server, basic_auth=(email, token))
@@ -395,19 +392,16 @@ def setup_clients(console):
                 }
                 console.print(f"✅ [green]JIRA connection successful for '{name}'.[/green]")
             except JIRAError as e:
-                console.print(f"❌ [bold red]JIRA connection failed for '{name}':[/bold red] {e.text}")
-                sys.exit(1)
+                raise SynkError(f"JIRA connection failed for '{name}': {e.text}") from e
             
     config["moco_session"] = requests.Session()
     config["moco_session"].headers.update({'Authorization': f'Bearer {config["moco_api_key"]}', 'Content-Type': 'application/json'})
 
     return config
 
-# --- MAIN WORKFLOW ---
-def main():
-    console = Console()
+def run_tracker(console: Console):
+    """The main application logic, wrapped to handle exceptions gracefully."""
     console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
-    
     config = setup_clients(console)
 
     while True:
@@ -504,6 +498,19 @@ def main():
             break
             
     console.print("\n[bold blue]Time tracking finished. Goodbye! 👋[/bold blue]")
+
+# --- MAIN WORKFLOW ---
+def main():
+    """Initializes the console and runs the main application."""
+    console = Console()
+    try:
+        run_tracker(console)
+    except SynkError as e:
+        console.print(f"\n[bold red]❌ An unrecoverable error occurred:[/bold red]\n{e}")
+        sys.exit(1)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n\n[bold yellow]Operation cancelled by user. Goodbye! 👋[/bold yellow]")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
