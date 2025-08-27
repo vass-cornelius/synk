@@ -115,6 +115,7 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     table.add_column("Task")
     table.add_column("Description", no_wrap=False)
 
+    total_seconds = 0
     for activity in parsed_activities:
         description = activity.get("description", "")
         match = re.search(r'\((\d{4})-(\d{4})\)', description)
@@ -124,6 +125,9 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
             time_str = f"{start[:2]}:{start[2:]} - {end[:2]}:{end[2:]}"
         
         project_name = activity.get('project', {}).get('name', 'N/A')
+        
+        hours = activity.get('hours', 0)
+        total_seconds += hours * 3600
         task_name = activity.get('task', {}).get('name', 'N/A').split('|')[0].strip()
         
         # Remove the time part from the description for cleaner display
@@ -132,6 +136,10 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
         table.add_row(time_str, project_name, task_name, desc_display)
     
     console.print(table)
+
+    total_hours = int(total_seconds // 3600)
+    total_minutes = int((total_seconds % 3600) // 60)
+    console.print(f"\n[bold]Total time booked: {total_hours:02d}:{total_minutes:02d}[/bold]")
 
 
 def ask_for_project(console, assigned_projects, last_activity):
