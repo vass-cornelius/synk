@@ -185,8 +185,22 @@ def ask_for_project(console, assigned_projects, last_activity):
 
 def ask_for_task(console, selected_project_data, default_task_name):
     tasks_original = selected_project_data.get('tasks', [])
-    tasks_display = [{'display_name': t.get('name', '').split('|')[0].strip(), **t} for t in tasks_original]
+    
+    # Process tasks to create a list for display with sorting-friendly names
+    tasks_display = []
+    for t in tasks_original:
+        task_item = t.copy()
+        base_name = t.get('name', '').split('|')[0].strip()
+        if t.get('billable', True):
+            task_item['display_name'] = base_name
+        else:
+            task_item['display_name'] = f" ({base_name})"
+        tasks_display.append(task_item)
 
+    # Sort the list: billable first, then alphabetically by display name
+    tasks_display.sort(key=lambda t: (not t.get('billable', True), t['display_name'].lower()))
+
+    # Find the default task using the original 'name' field, which is still present
     default_task = next((t for t in tasks_display if default_task_name and re.search(default_task_name, t.get('name', ''))), None)
     
     task_prompt = Text("\n▶️ ", style="cyan", end="")
@@ -194,7 +208,8 @@ def ask_for_task(console, selected_project_data, default_task_name):
     if default_task: task_prompt.append(f" (empty for '{default_task['display_name']}')")
     
     console.print(task_prompt)
-    for i, t in enumerate(tasks_display): console.print(f"  [magenta][{i+1:>2}][/magenta] {t['display_name']}")
+    for i, t in enumerate(tasks_display):
+        console.print(f"  [magenta][{i+1:>2}][/magenta] {t['display_name']}")
     
     while True:
         choice_input = Prompt.ask("[bold]Task number[/bold]")
@@ -205,8 +220,10 @@ def ask_for_task(console, selected_project_data, default_task_name):
             choice = int(choice_input) - 1
             if 0 <= choice < len(tasks_display):
                 return tasks_display[choice]
-            else: console.print("  [red]Choice out of range. Try again.[/red]")
-        except ValueError: console.print("  [red]Invalid input. Please enter a number.[/red]")
+            else:
+                console.print("  [red]Choice out of range. Try again.[/red]")
+        except ValueError:
+            console.print("  [red]Invalid input. Please enter a number.[/red]")
 
 def ask_for_jira(console, config):
     while True:
@@ -493,7 +510,7 @@ def run_tracker(console: Console):
 
         last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
-        if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]"):
+        if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]", default=True):
             display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
             break
             
