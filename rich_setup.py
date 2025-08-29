@@ -27,7 +27,7 @@ def run_rich_setup():
     if env_vars is not None:
         console.print("[bold]Please provide your Moco details:[/bold]")
         env_vars['MOCO_SUBDOMAIN'] = Prompt.ask("  Enter your Moco subdomain (e.g., 'your-company')")
-        env_vars['MOCO_API_KEY'] = Prompt.ask("  Enter your Moco API Key")
+        env_vars['MOCO_API_KEY'] = Prompt.ask("  Enter your Moco API Key", password=True)
 
         console.print("\n[bold]JIRA Configuration (supports multiple instances):[/bold]")
         jira_instances_str = Prompt.ask("  Enter short names for your JIRA instances, separated by commas (e.g., work,client_a)")
@@ -38,7 +38,7 @@ def run_rich_setup():
             console.print(f"\n[bold]Configuring JIRA instance: '{instance}'[/bold]")
             server = Prompt.ask(f"  Enter server URL for '{instance}' (e.g., 'https://{instance}.atlassian.net')")
             email = Prompt.ask(f"  Enter login email for '{instance}'")
-            token = Prompt.ask(f"  Enter API Token for '{instance}'")
+            token = Prompt.ask(f"  Enter API Token for '{instance}'", password=True)
             keys = Prompt.ask(f"  Enter project keys for '{instance}', separated by commas (e.g., SYN,DEVOPS)")
             jira_configs[instance] = {
                 "server": server,
