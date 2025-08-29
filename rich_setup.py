@@ -49,6 +49,7 @@ def run_rich_setup():
 
         console.print("\n[bold]Optional Configuration:[/bold]")
         env_vars['DEFAULT_TASK_NAME'] = Prompt.ask("  Enter a default task name pattern (e.g., '^CH: Main'). Leave empty to skip")
+        env_vars['TASK_FILTER_REGEX'] = Prompt.ask("  Enter a regex to hide tasks from the list (e.g., '^MK:'). Leave empty to skip")
         env_vars['QUESTION_ORDER'] = Prompt.ask("  Enter question order (default: project,task,jira,comment,time)", default="project,task,jira,comment,time")
 
         # Create the .env file content
@@ -70,6 +71,7 @@ JIRA_{instance.upper()}_PROJECT_KEYS="{config['keys']}"
 """
         env_content += f"""# -- Workflow Configuration --
 DEFAULT_TASK_NAME="{env_vars['DEFAULT_TASK_NAME']}"
+TASK_FILTER_REGEX="{env_vars['TASK_FILTER_REGEX']}"
 QUESTION_ORDER="{env_vars['QUESTION_ORDER']}"
 """
         try:

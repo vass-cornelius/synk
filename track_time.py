@@ -183,8 +183,21 @@ def ask_for_project(console, assigned_projects, last_activity):
         except ValueError:
             console.print("  [red]Please enter a valid number.[/red]")
 
-def ask_for_task(console, selected_project_data, default_task_name):
+def ask_for_task(console, selected_project_data, default_task_name, task_filter_regex):
     tasks_original = selected_project_data.get('tasks', [])
+    
+    # Apply the task filter regex if it exists
+    if task_filter_regex:
+        try:
+            # Filter out tasks where the name matches the regex
+            tasks_original = [
+                t for t in tasks_original 
+                if not re.search(task_filter_regex, t.get('name', ''))
+            ]
+        except re.error as e:
+            # Handle invalid regex gracefully without crashing
+            console.print(f"[bold yellow]⚠️ Warning: Invalid TASK_FILTER_REGEX in .env file: {e}[/bold yellow]")
+
     
     # Process tasks to create a list for display with sorting-friendly names
     tasks_display = []
@@ -366,6 +379,7 @@ def setup_clients(console):
         "moco_api_key": os.getenv("MOCO_API_KEY"),
         "question_order": os.getenv("QUESTION_ORDER", "project,task,jira,comment,time").split(','),
         "default_task_name": os.getenv("DEFAULT_TASK_NAME"),
+        "task_filter_regex": os.getenv("TASK_FILTER_REGEX"),
         "jira_instances": {}
     }
 
@@ -455,7 +469,7 @@ def run_tracker(console: Console):
                 entry_data["selected_project"] = ask_for_project(console, assigned_projects, last_activity)
             elif step == "task":
                 if "selected_project" not in entry_data: console.print("[red]Error: Project must be selected before task.[/red]"); break
-                entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"])
+                entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"], config["task_filter_regex"])
             elif step == "jira":
                 if config["jira_instances"]:
                     entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = ask_for_jira(console, config)
