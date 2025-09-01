@@ -3,3 +3,5 @@ jira
 python-dotenv
 rich
 pync
+pytest
+pytest-mock
