@@ -2,6 +2,7 @@
 import os
 import re
 import sys
+import json
 from datetime import date, datetime
 
 # --- Rich and other library imports ---
@@ -175,7 +176,7 @@ def ask_for_jira(console, tracker):
 def ask_for_comment(console):
     return Prompt.ask("\n▶️ [bold]Anything to add (comment)?[/bold]")
     
-def ask_for_time(console, tracker, last_activity):
+def ask_for_time(console, tracker, last_activity, project: dict = None):
     """Handles the time input workflow."""
     last_end_time = tracker.get_start_time_suggestion(last_activity)
     
@@ -205,7 +206,7 @@ def ask_for_time(console, tracker, last_activity):
     while True:
         end_input = Prompt.ask(end_prompt)        
         try:
-            end_time_str, duration_hours = tracker.calculate_duration(start_time_str, end_input)
+            end_time_str, duration_hours = tracker.calculate_duration(start_time_str, end_input, project=project)
             break
         except ValueError as e:
             console.print(f"  [red]{e}[/red]")
@@ -222,7 +223,7 @@ def setup_clients(console):
         "question_order": os.getenv("QUESTION_ORDER", "project,task,jira,comment,time").split(','),
         "default_task_name": os.getenv("DEFAULT_TASK_NAME"),
         "task_filter_regex": os.getenv("TASK_FILTER_REGEX"),
-        "jira_instances": {}
+        "jira_instances": {},
     }
 
     if not all([config["moco_subdomain"], config["moco_api_key"]]):
@@ -238,6 +239,27 @@ def setup_clients(console):
             console.print("✅ [green]Moco connection successful.[/green]")
         except (requests.exceptions.RequestException, KeyError) as e:
             raise SynkError(f"Moco connection failed: {e}") from e
+
+        # Parse duration rules
+        try:
+            min_dur = os.getenv("MIN_DURATION_MINUTES")
+            config["min_duration_minutes"] = int(min_dur) if min_dur else None
+        except (ValueError, TypeError):
+            console.print("[yellow]Warning: MIN_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
+            config["min_duration_minutes"] = None
+        
+        try:
+            max_dur = os.getenv("MAX_DURATION_MINUTES")
+            config["max_duration_minutes"] = int(max_dur) if max_dur else None
+        except (ValueError, TypeError):
+            console.print("[yellow]Warning: MAX_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
+            config["max_duration_minutes"] = None
+
+        rules_str = os.getenv("PROJECT_DURATION_RULES")
+        try:
+            config["project_duration_rules"] = json.loads(rules_str) if rules_str else {}
+        except json.JSONDecodeError:
+            raise SynkError("Invalid format for PROJECT_DURATION_RULES in .env. It must be valid JSON.")
 
         jira_instance_names = [name.strip() for name in os.getenv("JIRA_INSTANCES", "").split(',') if name.strip()]
         if not jira_instance_names:
@@ -321,9 +343,28 @@ def main_loop(console: Console):
             elif step == "comment":
                 entry_data["comment"] = ask_for_comment(console)
             elif step == "time":
-                start_time, end_time, duration = ask_for_time(console, tracker, last_activity)
+                selected_project = entry_data.get("selected_project")
+                start_time, end_time, duration = ask_for_time(console, tracker, last_activity, project=selected_project)
                 entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
         
+        # Re-validate duration. If the order was time,project,..., this ensures the project-specific
+        # rules are checked. If validation fails, it prompts the user to re-enter the time.
+        while True:
+            try:
+                tracker.validate_duration_rules(
+                    duration_hours=entry_data.get('duration_hours', 0),
+                    project=entry_data.get('selected_project')
+                )
+                break  # Validation passed, continue to summary
+            except (ValueError, KeyError) as e:
+                console.print(f"\n[bold red]❌ Validation Error:[/bold red] {e}")
+                console.print("[yellow]The entered time violates a duration rule for the selected project. Please correct the time.[/yellow]")
+                
+                # Re-ask for time, preserving other data
+                selected_project = entry_data.get("selected_project")
+                start_time, end_time, duration = ask_for_time(console, tracker, last_activity, project=selected_project)
+                entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
+
         start_time_hhmm = entry_data.get('start_time', 'N/A').replace(':', '')
         end_time_hhmm = entry_data.get('end_time', 'N/A').replace(':', '')
         time_part = f"({start_time_hhmm}-{end_time_hhmm})"

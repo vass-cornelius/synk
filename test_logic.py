@@ -13,7 +13,10 @@ def mock_config():
         "moco_user_id": 123,
         "default_task_name": "^CH: Main",
         "task_filter_regex": "^MK:",
-        "jira_instances": {}
+        "jira_instances": {},
+        "min_duration_minutes": None,
+        "max_duration_minutes": None,
+        "project_duration_rules": {}
     }
 
 @pytest.fixture
@@ -94,6 +97,45 @@ def test_calculate_duration_invalid_input(tracker):
     """Tests that an error is raised for invalid duration input."""
     with pytest.raises(ValueError, match="Invalid format"):
         tracker.calculate_duration("10:00", "abc")
+
+def test_calculate_duration_min_limit(tracker):
+    """Tests that duration below the minimum raises an error."""
+    tracker.config["min_duration_minutes"] = 15
+    with pytest.raises(ValueError, match="Duration must be at least 15 minutes."):
+        # 0.2 hours = 12 minutes
+        tracker.calculate_duration("10:00", "0.2")
+
+def test_calculate_duration_max_limit(tracker):
+    """Tests that duration above the maximum raises an error."""
+    tracker.config["max_duration_minutes"] = 60
+    with pytest.raises(ValueError, match=r"Duration must not exceed 60 minutes \(1.0 hours\)\."):
+        tracker.calculate_duration("10:00", "1.5") # 90 minutes
+
+def test_calculate_duration_project_override(tracker):
+    """Tests that project-specific rules override global rules."""
+    tracker.config["min_duration_minutes"] = 15
+    tracker.config["project_duration_rules"] = {
+        "Test Customer / Test Project": {"min": 30}
+    }
+    project = {
+        "name": "Test Project",
+        "customer": {"name": "Test Customer"}
+    }
+    
+    # This is ~20 minutes, which is > global min (15) but < project min (30)
+    with pytest.raises(ValueError, match="Duration must be at least 30 minutes."):
+        tracker.calculate_duration("09:00", "0.3333", project=project)
+
+    # This should pass as it's over 30 mins (~36 mins)
+    end_time, duration = tracker.calculate_duration("09:00", "0.6", project=project)
+    assert duration == 0.6
+
+def test_calculate_duration_within_limits(tracker):
+    """Tests that a valid duration passes without raising an error."""
+    tracker.config["min_duration_minutes"] = 10
+    tracker.config["max_duration_minutes"] = 120
+    end_time, duration = tracker.calculate_duration("10:00", "1.0")
+    assert duration == 1.0
 
 @patch('logic.moco_get')
 def test_get_last_activity_returns_none_when_no_activities(mock_moco_get, tracker):

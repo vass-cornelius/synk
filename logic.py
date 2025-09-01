@@ -194,9 +194,10 @@ class TimeTracker:
                 return f"{end_time_hhmm[:2]}:{end_time_hhmm[2:]}"
         return None
 
-    def calculate_duration(self, start_time_str: str, end_input: str) -> Tuple[str, float]:
+    def calculate_duration(self, start_time_str: str, end_input: str, project: Optional[Dict[str, Any]] = None) -> Tuple[str, float]:
         """Calculates duration and end time from user input."""
         start_time_dt = datetime.strptime(start_time_str, "%H:%M")
+
         parsed_end_time = parse_and_validate_time_input(end_input)
 
         if parsed_end_time:
@@ -214,7 +215,38 @@ class TimeTracker:
             except ValueError:
                 raise ValueError("Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).")
 
+        # --- Initial Duration Validation ---
+        self.validate_duration_rules(duration_hours, project)
+
         return end_time_str, duration_hours
+
+    def validate_duration_rules(self, duration_hours: float, project: Optional[Dict[str, Any]]):
+        """
+        Validates a given duration in hours against global and project-specific rules.
+        Raises ValueError if a rule is violated.
+        """
+        min_duration_minutes = self.config.get("min_duration_minutes")
+        max_duration_minutes = self.config.get("max_duration_minutes")
+
+        if project and self.config.get("project_duration_rules"):
+            customer_name = project.get('customer', {}).get('name', 'No Customer')
+            project_name = project['name']
+            # The key must match the display format in `ask_for_project`
+            project_key = f"{customer_name} / {project_name}"
+
+            project_rules = self.config["project_duration_rules"].get(project_key)
+            if project_rules:
+                # Project rules override global rules if they exist
+                min_duration_minutes = project_rules.get("min", min_duration_minutes)
+                max_duration_minutes = project_rules.get("max", max_duration_minutes)
+
+        duration_minutes = duration_hours * 60
+
+        if min_duration_minutes is not None and duration_minutes < min_duration_minutes:
+            raise ValueError(f"Duration must be at least {min_duration_minutes} minutes.")
+
+        if max_duration_minutes is not None and duration_minutes > max_duration_minutes:
+            raise ValueError(f"Duration must not exceed {max_duration_minutes} minutes ({max_duration_minutes/60:.1f} hours).")
 
     def save_entry(self, work_date: date, entry_data: Dict[str, Any]):
         """Saves the time entry to Moco and JIRA."""

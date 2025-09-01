@@ -50,6 +50,8 @@ def run_rich_setup():
         console.print("\n[bold]Optional Configuration:[/bold]")
         env_vars['DEFAULT_TASK_NAME'] = Prompt.ask("  Enter a default task name pattern (e.g., '^CH: Main'). Leave empty to skip")
         env_vars['TASK_FILTER_REGEX'] = Prompt.ask("  Enter a regex to hide tasks from the list (e.g., '^MK:'). Leave empty to skip")
+        env_vars['MIN_DURATION_MINUTES'] = Prompt.ask("  Enter a global minimum entry duration in minutes (e.g., 15). Leave empty for no minimum")
+        env_vars['MAX_DURATION_MINUTES'] = Prompt.ask("  Enter a global maximum entry duration in minutes (e.g., 180 for 3 hours). Leave empty for no maximum")
         env_vars['QUESTION_ORDER'] = Prompt.ask("  Enter question order (default: project,task,jira,comment,time)", default="project,task,jira,comment,time")
 
         # Create the .env file content
@@ -73,6 +75,17 @@ JIRA_{instance.upper()}_PROJECT_KEYS="{config['keys']}"
 DEFAULT_TASK_NAME="{env_vars['DEFAULT_TASK_NAME']}"
 TASK_FILTER_REGEX="{env_vars['TASK_FILTER_REGEX']}"
 QUESTION_ORDER="{env_vars['QUESTION_ORDER']}"
+
+# -- Duration Rules (in minutes) --
+# Global minimum/maximum duration for a single time entry.
+# Leave empty for no limit.
+MIN_DURATION_MINUTES="{env_vars['MIN_DURATION_MINUTES']}"
+MAX_DURATION_MINUTES="{env_vars['MAX_DURATION_MINUTES']}"
+
+# Per-project duration rules (optional, overrides global settings).
+# This must be a valid JSON string. The key should match the project display name: "Customer / Project Name".
+# Example: PROJECT_DURATION_RULES='{{"Internal / Synk": {{"min": 5, "max": 120}}, "Big Client / Website Relaunch": {{"min": 15}}}}'
+PROJECT_DURATION_RULES=''
 """
         try:
             with open('.env', 'w') as f:
