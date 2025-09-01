@@ -2,8 +2,8 @@
 import os
 import re
 import sys
-from datetime import datetime, timedelta, date
-from typing import Optional
+from datetime import date, datetime
+
 # --- Rich and other library imports ---
 import requests
 from requests.auth import HTTPBasicAuth
@@ -15,99 +15,14 @@ from rich.prompt import Prompt, Confirm
 from rich.text import Text
 from rich.table import Table
 
-# --- CUSTOM EXCEPTION ---
-class SynkError(Exception):
-    """Custom exception for application-specific errors to allow for graceful exit."""
-    pass
-
-# --- API HELPER FUNCTIONS ---
-def moco_get(session, moco_subdomain, endpoint, params=None):
-    """Generic GET request handler for Moco API."""
-    url = f"https://{moco_subdomain}.mocoapp.com/api/v1/{endpoint}"
-    try:
-        response = session.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        raise SynkError(f"Moco API Error on GET {endpoint}: {e}") from e
-
-def moco_post(session, moco_subdomain, endpoint, data):
-    """Generic POST request handler for Moco API."""
-    url = f"https://{moco_subdomain}.mocoapp.com/api/v1/{endpoint}"
-    try:
-        response = session.post(url, json=data)
-        response.raise_for_status()
-        return response
-    except requests.exceptions.RequestException as e:
-        error_text = e.response.text if e.response else str(e)
-        raise SynkError(f"Moco API Error creating entry: {error_text}") from e
-
-def get_last_activity(session, moco_subdomain, user_id, for_date):
-    """Fetch the entire object of the last recorded entry for the user on a specific date."""
-    params = {'user_id': user_id, 'from': for_date.isoformat(), 'to': for_date.isoformat()}
-    activities = moco_get(session, moco_subdomain, "activities", params=params)
-    if not activities:
-        return None
-    
-    activities.sort(key=lambda x: x.get('id', 0), reverse=True)
-    return activities[0]
-
-def search_jira_issues(jql, jira_server, auth, max_results=5):
-    """Searches for JIRA issues using the REST API."""
-    url = f"{jira_server}/rest/api/3/search/jql"
-    headers = {"Accept": "application/json"}
-    query = {'jql': jql, 'maxResults': max_results, 'fields': 'summary'}
-    
-    try:
-        response = requests.get(url, headers=headers, params=query, auth=auth)
-        response.raise_for_status()
-        return response.json().get('issues', [])
-    except requests.exceptions.RequestException as e:
-        # This is a non-fatal error during an interactive search, so just printing is fine.
-        Console().print(f"[bold yellow]⚠️ JIRA Search Warning:[/bold yellow] {e}")
-        return []
-
-def parse_and_validate_time_input(time_str: str) -> Optional[str]:
-    """
-    Parses and validates a time string in (h)hmm format.
-    Returns a "HH:mm" string if valid, otherwise None.
-    """
-    if not time_str.isdigit() or not 3 <= len(time_str) <= 4:
-        return None
-
-    time_str = time_str.zfill(4)  # Pad with leading zero if needed, e.g., "800" -> "0800"
-
-    try:
-        hour, minute = int(time_str[:2]), int(time_str[2:])
-        if 0 <= hour <= 23 and 0 <= minute <= 59:
-            return f"{hour:02d}:{minute:02d}"
-    except ValueError:
-        return None
-    return None
+from logic import TimeTracker, SynkError, parse_and_validate_time_input
 
 # --- WORKFLOW STEP FUNCTIONS ---
-def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
+def display_daily_entries(console, activities):
     """Fetches and displays all entries for a given date."""
-    console.print(f"\n[bold]🗓️  Entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
-    with console.status("[yellow]Fetching existing entries...[/yellow]"):
-        params = {'user_id': user_id, 'from': work_date.isoformat(), 'to': work_date.isoformat()}
-        activities = moco_get(session, moco_subdomain, "activities", params=params)
-
     if not activities:
         console.print("  [grey53]No entries found for this date.[/grey53]")
         return
-
-    def get_sort_key(activity: dict) -> tuple:
-        """Sort key for activities: time-based entries first, then others by ID."""
-        description = activity.get("description", "")
-        match = re.search(r'\((\d{4})-(\d{4})\)', description)
-        if match:
-            start_time_hhmm = match.group(1)
-            return (0, f"{start_time_hhmm[:2]}:{start_time_hhmm[2:]}")
-        return (1, activity.get('id')) # Sort activities without time at the end
-
-    # Sort activities by the parsed start time
-    activities.sort(key=get_sort_key)
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
     table.add_column("Time", style="cyan", width=15)
@@ -142,15 +57,8 @@ def display_daily_entries(console, session, moco_subdomain, user_id, work_date):
     console.print(f"\n[bold]Total time booked: {total_hours:02d}:{total_minutes:02d}[/bold]")
 
 
-def ask_for_project(console, assigned_projects, last_activity):
-    default_project = None
-    if last_activity:
-        last_project_id = last_activity.get('project', {}).get('id')
-        project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
-        if project_to_move:
-            assigned_projects.remove(project_to_move)
-            assigned_projects.insert(0, project_to_move)
-            default_project = project_to_move
+def ask_for_project(console, assigned_projects, default_project):
+    """Asks the user to select a project from a list."""
 
     project_prompt = Text("\n▶️ ", style="cyan", end="")
     project_prompt.append("What project did you work on?", style="bold")
@@ -183,42 +91,12 @@ def ask_for_project(console, assigned_projects, last_activity):
         except ValueError:
             console.print("  [red]Please enter a valid number.[/red]")
 
-def ask_for_task(console, selected_project_data, default_task_name, task_filter_regex):
-    tasks_original = selected_project_data.get('tasks', [])
-    
-    # Apply the task filter regex if it exists
-    if task_filter_regex:
-        try:
-            # Filter out tasks where the name matches the regex
-            tasks_original = [
-                t for t in tasks_original 
-                if not re.search(task_filter_regex, t.get('name', ''))
-            ]
-        except re.error as e:
-            # Handle invalid regex gracefully without crashing
-            console.print(f"[bold yellow]⚠️ Warning: Invalid TASK_FILTER_REGEX in .env file: {e}[/bold yellow]")
-
-    
-    # Process tasks to create a list for display with sorting-friendly names
-    tasks_display = []
-    for t in tasks_original:
-        task_item = t.copy()
-        base_name = t.get('name', '').split('|')[0].strip()
-        if t.get('billable', True):
-            task_item['display_name'] = base_name
-        else:
-            task_item['display_name'] = f" ({base_name})"
-        tasks_display.append(task_item)
-
-    # Sort the list: billable first, then alphabetically by display name
-    tasks_display.sort(key=lambda t: (not t.get('billable', True), t['display_name'].lower()))
-
-    # Find the default task using the original 'name' field, which is still present
-    default_task = next((t for t in tasks_display if default_task_name and re.search(default_task_name, t.get('name', ''))), None)
-    
+def ask_for_task(console, tasks_display, default_task):
+    """Asks the user to select a task from a list."""
     task_prompt = Text("\n▶️ ", style="cyan", end="")
     task_prompt.append("What task did you work on?", style="bold")
-    if default_task: task_prompt.append(f" (empty for '{default_task['display_name']}')")
+    if default_task:
+        task_prompt.append(f" (empty for '{default_task['display_name']}')")
     
     console.print(task_prompt)
     for i, t in enumerate(tasks_display):
@@ -238,22 +116,16 @@ def ask_for_task(console, selected_project_data, default_task_name, task_filter_
         except ValueError:
             console.print("  [red]Invalid input. Please enter a number.[/red]")
 
-def ask_for_jira(console, config):
+def ask_for_jira(console, tracker):
+    """Handles the JIRA ticket selection workflow."""
     while True:
         jira_id_input = Prompt.ask("\n▶️ [bold]JIRA ticket?[/bold] (e.g., PROJ-123, '?' for list, empty to skip)")
         
         if not jira_id_input:
             return None, None, None
-
         if jira_id_input == '?':
-            all_recent_issues = []
-            with console.status("[yellow]Fetching recent JIRA tickets from all instances...[/yellow]"):
-                for name, jira_config in config["jira_instances"].items():
-                    jql_query = 'assignee = currentUser() AND (status = "In Progress" OR updated >= -14d) ORDER BY updated DESC'
-                    issues = search_jira_issues(jql_query, jira_config['server'], jira_config['auth'], max_results=5)
-                    for issue in issues:
-                        issue['instance_name'] = name
-                    all_recent_issues.extend(issues)
+            with console.status("[yellow]Fetching recent JIRA tickets...[/yellow]"):
+                all_recent_issues = tracker.search_recent_jira_issues()
             
             if not all_recent_issues:
                 console.print("  [yellow]No recent or in-progress tickets found across all instances.[/yellow]")
@@ -271,8 +143,7 @@ def ask_for_jira(console, config):
                     if 1 <= choice <= len(all_recent_issues):
                         selected_issue_data = all_recent_issues[choice - 1]
                         jira_id = selected_issue_data['key']
-                        instance_name = selected_issue_data['instance_name']
-                        jira_client = config['jira_instances'][instance_name]['client']
+                        jira_client = tracker.config['jira_instances'][selected_issue_data['instance_name']]['client']
                         return jira_client.issue(jira_id), jira_id, jira_client
                     else:
                         console.print("  [red]Choice out of range.[/red]")
@@ -282,45 +153,32 @@ def ask_for_jira(console, config):
             if 'jira_id' not in locals():
                 continue
 
-        ticket_prefix = jira_id_input.split('-')[0].upper()
-        target_instance = None
-        for name, jira_config in config["jira_instances"].items():
-            if ticket_prefix in jira_config['keys']:
-                target_instance = jira_config
-                break
-        
-        if not target_instance:
-            console.print(f"  ❌ [red]No JIRA instance configured for project key '{ticket_prefix}'. Check your .env file.[/red]")
+        try:
+            with console.status(f"[yellow]Verifying {jira_id_input.upper()}...[/yellow]"):
+                verified_data = tracker.verify_jira_ticket(jira_id_input)
+        except SynkError as e:
+            console.print(f"  ❌ [red]{e}[/red]")
             continue
 
-        with console.status(f"[yellow]Verifying {jira_id_input.upper()} on '{target_instance['name']}' instance...[/yellow]"):
-            search_results = search_jira_issues(f'key = "{jira_id_input.upper()}"', target_instance['server'], target_instance['auth'], max_results=1)
-        
-        if search_results:
-            jira_issue_candidate_data = search_results[0]
-            console.print(f"  ✅ [green]Found:[/green] {jira_issue_candidate_data['fields']['summary']}")
+        if verified_data:
+            jira_issue, jira_id, jira_client, summary = verified_data
+            console.print(f"  ✅ [green]Found:[/green] {summary}")
             
             if Confirm.ask("Is this the correct ticket?", default=True):
-                jira_id = jira_issue_candidate_data['key']
-                jira_client = target_instance['client']
-                return jira_client.issue(jira_id), jira_id, jira_client
+                return jira_issue, jira_id, jira_client
             else:
                 console.print("  [yellow]Please enter the ticket ID again.[/yellow]")
                 continue
         else:
-            console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found on the '{target_instance['name']}' instance.[/red]")
+            console.print(f"  ❌ [red]JIRA ticket '{jira_id_input.upper()}' not found.[/red]")
 
 def ask_for_comment(console):
     return Prompt.ask("\n▶️ [bold]Anything to add (comment)?[/bold]")
-
-def ask_for_time(console, last_activity):
-    last_end_time = None
-    if last_activity:
-        match = re.search(r'\((\d{4})-(\d{4})\)', last_activity.get("description", ""))
-        if match:
-            end_time_hhmm = match.group(2)
-            last_end_time = f"{end_time_hhmm[:2]}:{end_time_hhmm[2:]}"
-
+    
+def ask_for_time(console, tracker, last_activity):
+    """Handles the time input workflow."""
+    last_end_time = tracker.get_start_time_suggestion(last_activity)
+    
     start_prompt = Text("\n▶️ ", style="cyan", end="")
     start_prompt.append("When did you start?", style="bold")
     if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
@@ -345,28 +203,12 @@ def ask_for_time(console, last_activity):
     end_prompt.append(" ((h)hmm or decimal hours)")
     
     while True:
-        end_input = Prompt.ask(end_prompt)
-        start_time_dt = datetime.strptime(start_time_str, "%H:%M")
-        
-        parsed_end_time = parse_and_validate_time_input(end_input)
-        if parsed_end_time:
-            end_time_dt = datetime.strptime(parsed_end_time, "%H:%M")
-            if end_time_dt <= start_time_dt:
-                console.print("  [red]End time must be after start time.[/red]")
-                continue
-            duration_hours = (end_time_dt - start_time_dt).total_seconds() / 3600
-            end_time_str = parsed_end_time
+        end_input = Prompt.ask(end_prompt)        
+        try:
+            end_time_str, duration_hours = tracker.calculate_duration(start_time_str, end_input)
             break
-        else:
-            try:
-                duration_hours = float(end_input)
-                if duration_hours <= 0:
-                    console.print("  [red]Duration must be positive.[/red]")
-                    continue
-                end_time_str = (start_time_dt + timedelta(hours=duration_hours)).strftime("%H:%M")
-                break
-            except ValueError:
-                console.print("  [red]Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).[/red]")
+        except ValueError as e:
+            console.print(f"  [red]{e}[/red]")
     
     return start_time_str, end_time_str, duration_hours
 
@@ -430,10 +272,11 @@ def setup_clients(console):
 
     return config
 
-def run_tracker(console: Console):
+def main_loop(console: Console):
     """The main application logic, wrapped to handle exceptions gracefully."""
     console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
     config = setup_clients(console)
+    tracker = TimeTracker(config)
 
     while True:
         date_input = Prompt.ask("▶️ Enter date ([bold]YYYY-MM-DD[/bold]), or leave empty for today")
@@ -445,20 +288,19 @@ def run_tracker(console: Console):
             break
         except ValueError:
             console.print("  [red]Invalid date format. Please try again.[/red]")
-            
-    display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
 
-    last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
+    console.print(f"\n[bold]🗓️  Entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+    with console.status("[yellow]Fetching existing entries...[/yellow]"):
+        daily_entries = tracker.get_daily_entries(work_date)
+    display_daily_entries(console, daily_entries)
+
+    last_activity = tracker.get_last_activity(work_date)
 
     while True:
         entry_data = {}
         
         with console.status("[yellow]Fetching projects...[/yellow]"):
-            all_assigned_projects = moco_get(config["moco_session"], config["moco_subdomain"], "projects/assigned")
-            assigned_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
-            for p in assigned_projects:
-                p['tasks'] = [t for t in p.get('tasks', []) if t.get('active', False)]
-            assigned_projects.sort(key=lambda p: (p.get('customer', {}).get('name', '').lower(), p.get('name', '').lower()))
+            assigned_projects, default_project = tracker.get_project_choices(last_activity)
 
         if not assigned_projects:
             console.print("\n[bold red]❌ No assigned projects with active tasks were found.[/bold red]")
@@ -466,19 +308,20 @@ def run_tracker(console: Console):
 
         for step in config["question_order"]:
             if step == "project":
-                entry_data["selected_project"] = ask_for_project(console, assigned_projects, last_activity)
+                entry_data["selected_project"] = ask_for_project(console, assigned_projects, default_project)
             elif step == "task":
                 if "selected_project" not in entry_data: console.print("[red]Error: Project must be selected before task.[/red]"); break
-                entry_data["selected_task"] = ask_for_task(console, entry_data["selected_project"], config["default_task_name"], config["task_filter_regex"])
+                tasks, default_task = tracker.get_task_choices(entry_data["selected_project"])
+                entry_data["selected_task"] = ask_for_task(console, tasks, default_task)
             elif step == "jira":
                 if config["jira_instances"]:
-                    entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = ask_for_jira(console, config)
+                    entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = ask_for_jira(console, tracker)
                 else: # Skip if no JIRA instances are configured
                     entry_data["jira_issue"], entry_data["jira_id"], entry_data["jira_client"] = None, None, None
             elif step == "comment":
                 entry_data["comment"] = ask_for_comment(console)
             elif step == "time":
-                start_time, end_time, duration = ask_for_time(console, last_activity)
+                start_time, end_time, duration = ask_for_time(console, tracker, last_activity)
                 entry_data.update({"start_time": start_time, "end_time": end_time, "duration_hours": duration})
         
         start_time_hhmm = entry_data.get('start_time', 'N/A').replace(':', '')
@@ -498,34 +341,20 @@ def run_tracker(console: Console):
 
         if Confirm.ask("\n[bold]💾 Save this entry?[/bold]", default=True):
             with console.status("[yellow]Saving...[/yellow]"):
-                moco_payload = {
-                    "date": work_date.isoformat(),
-                    "project_id": entry_data["selected_project"]['id'],
-                    "task_id": entry_data["selected_task"]['id'],
-                    "hours": round(entry_data["duration_hours"], 4),
-                    "description": description
-                }
-                moco_post(config["moco_session"], config["moco_subdomain"], "activities", data=moco_payload)
+                tracker.save_entry(work_date, entry_data)
                 console.print("✅ [green]Entry saved to Moco.[/green]")
-                
-                if entry_data.get("jira_issue"):
-                    try:
-                        jira_comment = f"{entry_data.get('comment', '')} {time_part}".strip()
-                        start_dt = datetime.strptime(entry_data['start_time'], "%H:%M")
-                        jira_client = entry_data["jira_client"]
-                        jira_client.add_worklog(
-                            issue=entry_data["jira_issue"], timeSpentSeconds=int(entry_data["duration_hours"]*3600),
-                            comment=jira_comment, started=datetime.combine(work_date, start_dt.time()).astimezone()
-                        )
-                        console.print("✅ [green]Worklog added to JIRA.[/green]")
-                    except JIRAError as e: console.print(f"❌ [red]Failed to add JIRA worklog:[/red] {e.text}")
+                if entry_data.get("jira_id"):
+                    console.print("✅ [green]Worklog added to JIRA.[/green]")
         else:
             console.print(" Canceled.")
 
-        last_activity = get_last_activity(config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
+        last_activity = tracker.get_last_activity(work_date)
 
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]", default=True):
-            display_daily_entries(console, config["moco_session"], config["moco_subdomain"], config["moco_user_id"], work_date)
+            console.print(f"\n[bold]🗓️  Final entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+            with console.status("[yellow]Fetching updated entries...[/yellow]"):
+                daily_entries = tracker.get_daily_entries(work_date)
+            display_daily_entries(console, daily_entries)
             break
             
     console.print("\n[bold blue]Time tracking finished. Goodbye! 👋[/bold blue]")
@@ -535,7 +364,7 @@ def main():
     """Initializes the console and runs the main application."""
     console = Console()
     try:
-        run_tracker(console)
+        main_loop(console)
     except SynkError as e:
         console.print(f"\n[bold red]❌ An unrecoverable error occurred:[/bold red]\n{e}")
         sys.exit(1)
