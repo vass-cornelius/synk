@@ -195,7 +195,7 @@ class TimeTracker:
         return None
 
     def calculate_duration(self, start_time_str: str, end_input: str, project: Optional[Dict[str, Any]] = None) -> Tuple[str, float]:
-        """Calculates duration and end time from user input."""
+        """Calculates duration and end time from user input, applying rounding if configured."""
         start_time_dt = datetime.strptime(start_time_str, "%H:%M")
 
         parsed_end_time = parse_and_validate_time_input(end_input)
@@ -205,17 +205,28 @@ class TimeTracker:
             if end_time_dt <= start_time_dt:
                 raise ValueError("End time must be after start time.")
             duration_hours = (end_time_dt - start_time_dt).total_seconds() / 3600
-            end_time_str = parsed_end_time
         else:
             try:
                 duration_hours = float(end_input)
                 if duration_hours <= 0:
                     raise ValueError("Duration must be positive.")
-                end_time_str = (start_time_dt + timedelta(hours=duration_hours)).strftime("%H:%M")
             except ValueError:
                 raise ValueError("Invalid format. Use (h)hmm or a decimal number (e.g., 1.5).")
 
-        # --- Initial Duration Validation ---
+        # --- Rounding Logic ---
+        rounding_increment = self.config.get("duration_rounding_increment")
+        if rounding_increment and rounding_increment > 0:
+            original_duration = duration_hours
+            duration_hours = round(duration_hours / rounding_increment) * rounding_increment
+            # If rounding to 0, but original duration was positive, round up to the smallest increment.
+            if duration_hours == 0 and original_duration > 0:
+                duration_hours = rounding_increment
+
+        # Recalculate end time based on final (potentially rounded) duration
+        end_time_dt = start_time_dt + timedelta(hours=duration_hours)
+        end_time_str = end_time_dt.strftime("%H:%M")
+
+        # --- Duration Validation ---
         self.validate_duration_rules(duration_hours, project)
 
         return end_time_str, duration_hours

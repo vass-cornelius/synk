@@ -255,6 +255,16 @@ def setup_clients(console):
             console.print("[yellow]Warning: MAX_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
             config["max_duration_minutes"] = None
 
+        try:
+            rounding_str = os.getenv("DURATION_ROUNDING_INCREMENT")
+            config["duration_rounding_increment"] = float(rounding_str) if rounding_str else None
+            if config["duration_rounding_increment"] is not None and config["duration_rounding_increment"] <= 0:
+                console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT must be positive. Ignoring.[/yellow]")
+                config["duration_rounding_increment"] = None
+        except (ValueError, TypeError):
+            console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT is not a valid number. Ignoring.[/yellow]")
+            config["duration_rounding_increment"] = None
+
         rules_str = os.getenv("PROJECT_DURATION_RULES")
         try:
             config["project_duration_rules"] = json.loads(rules_str) if rules_str else {}

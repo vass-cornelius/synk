@@ -137,6 +137,29 @@ def test_calculate_duration_within_limits(tracker):
     end_time, duration = tracker.calculate_duration("10:00", "1.0")
     assert duration == 1.0
 
+@pytest.mark.parametrize("start_time, end_input, rounding, expected_duration, expected_end_time", [
+    # Round up (12 mins -> 15 mins)
+    ("09:00", "0912", 0.25, 0.25, "09:15"),
+    # Round down to 0, then force up to smallest increment (7 mins -> 15 mins)
+    ("09:00", "0907", 0.25, 0.25, "09:15"),
+    # Round up from float (0.2h -> 0.25h)
+    ("10:00", "0.2", 0.25, 0.25, "10:15"),
+    # No rounding configured
+    ("09:00", "0912", None, 0.2, "09:12"),
+    # Exact match, no change
+    ("11:00", "1115", 0.25, 0.25, "11:15"),
+    # Rounding to 30 mins (0.5h) - 20 mins -> 30 mins
+    ("13:00", "1320", 0.5, 0.5, "13:30"),
+    # Rounding to 30 mins (0.5h) - 35 mins -> 30 mins
+    ("13:00", "1335", 0.5, 0.5, "13:30"),
+])
+def test_calculate_duration_rounding(tracker, start_time, end_input, rounding, expected_duration, expected_end_time):
+    """Tests duration calculation with various rounding scenarios."""
+    tracker.config["duration_rounding_increment"] = rounding
+    end_time, duration = tracker.calculate_duration(start_time, end_input)
+    assert duration == pytest.approx(expected_duration)
+    assert end_time == expected_end_time
+
 @patch('logic.moco_get')
 def test_get_last_activity_returns_none_when_no_activities(mock_moco_get, tracker):
     """Tests that get_last_activity handles cases with no entries."""

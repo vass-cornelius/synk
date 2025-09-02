@@ -52,6 +52,7 @@ def run_rich_setup():
         env_vars['TASK_FILTER_REGEX'] = Prompt.ask("  Enter a regex to hide tasks from the list (e.g., '^MK:'). Leave empty to skip")
         env_vars['MIN_DURATION_MINUTES'] = Prompt.ask("  Enter a global minimum entry duration in minutes (e.g., 15). Leave empty for no minimum")
         env_vars['MAX_DURATION_MINUTES'] = Prompt.ask("  Enter a global maximum entry duration in minutes (e.g., 180 for 3 hours). Leave empty for no maximum")
+        env_vars['DURATION_ROUNDING_INCREMENT'] = Prompt.ask("  Enter a duration rounding increment in hours (e.g., 0.25 for 15 mins). Leave empty for no rounding")
         env_vars['QUESTION_ORDER'] = Prompt.ask("  Enter question order (default: project,task,jira,comment,time)", default="project,task,jira,comment,time")
 
         # Create the .env file content
@@ -81,6 +82,10 @@ QUESTION_ORDER="{env_vars['QUESTION_ORDER']}"
 # Leave empty for no limit.
 MIN_DURATION_MINUTES="{env_vars['MIN_DURATION_MINUTES']}"
 MAX_DURATION_MINUTES="{env_vars['MAX_DURATION_MINUTES']}"
+
+# Round duration to the nearest increment (in hours).
+# e.g., 0.25 rounds to the nearest 15 minutes. Leave empty to disable.
+DURATION_ROUNDING_INCREMENT="{env_vars['DURATION_ROUNDING_INCREMENT']}"
 
 # Per-project duration rules (optional, overrides global settings).
 # This must be a valid JSON string. The key should match the project display name: "Customer / Project Name".
