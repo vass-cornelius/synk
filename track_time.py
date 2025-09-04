@@ -337,7 +337,7 @@ def main_loop(console: Console):
         entry_data = {}
         
         with console.status("[yellow]Fetching projects...[/yellow]"):
-            assigned_projects, default_project = tracker.get_project_choices(last_activity)
+            assigned_projects, default_project = tracker.get_project_choices(work_date, last_activity)
 
         if not assigned_projects:
             console.print("\n[bold red]❌ No assigned projects with active tasks were found.[/bold red]")

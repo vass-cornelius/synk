@@ -105,12 +105,13 @@ class TimeTracker:
         activities.sort(key=get_sort_key)
         return activities
 
-    def get_project_choices(self, last_activity: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    def get_project_choices(self, work_date: date, last_activity: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
         Fetches and prepares the list of projects for user selection, sorted by client usage,
         then client name, then project usage, and finally project name.
+        Predicts the default project based on same-weekday usage over the last 4 weeks.
         """
-        # Fetch recent activities to determine project usage frequency
+        # --- Step 1: Fetch all recent activities for overall sorting ---
         from_date = date.today() - timedelta(days=28)  # 4 weeks back
         to_date = date.today()
         params = {'user_id': self.moco_user_id, 'from': from_date.isoformat(), 'to': to_date.isoformat()}
@@ -122,7 +123,7 @@ class TimeTracker:
             if project_id:
                 project_usage_counts[project_id] = project_usage_counts.get(project_id, 0) + 1
 
-        # Fetch and filter assigned projects
+        # --- Step 2: Fetch and filter all assigned projects ---
         all_assigned_projects = moco_get(self.moco_session, self.moco_subdomain, "projects/assigned")
         assigned_projects = [p for p in all_assigned_projects if p.get('active', False) and any(t.get('active', False) for t in p.get('tasks', []))]
         for p in assigned_projects:
@@ -136,7 +137,7 @@ class TimeTracker:
                 usage = project_usage_counts.get(p['id'], 0)
                 client_usage_counts[client_id] = client_usage_counts.get(client_id, 0) + usage
 
-        # Sort by client usage (desc), then client name (asc), then project usage (desc), then project name (asc)
+        # --- Step 3: Sort the full list by general recent usage ---
         assigned_projects.sort(key=lambda p: (
             -client_usage_counts.get(p.get('customer', {}).get('id'), 0),
             p.get('customer', {}).get('name', '').lower(),
@@ -144,14 +145,37 @@ class TimeTracker:
             p.get('name', '').lower()
         ))
 
+        # --- Step 4: Predict the default project ---
+        # Filter recent activities to only include those on the same weekday as work_date
+        target_weekday = work_date.weekday()
+        weekday_specific_activities = [
+            act for act in recent_activities
+            if date.fromisoformat(act['date']).weekday() == target_weekday
+        ]
+
+        # Calculate project frequency based on this weekday-specific data
+        weekday_project_counts = {}
+        for activity in weekday_specific_activities:
+            project_id = activity.get('project', {}).get('id')
+            if project_id:
+                weekday_project_counts[project_id] = weekday_project_counts.get(project_id, 0) + 1
+
+        # 1. Predict based on highest frequency for that weekday.
+        predicted_project_id = max(weekday_project_counts, key=weekday_project_counts.get) if weekday_project_counts else None
+
+        # 2. If there's a last activity on the same day, prioritize it for continuity.
+        last_project_id = last_activity.get('project', {}).get('id') if last_activity else None
+
+        # Determine the final default project ID to use.
+        default_project_id = last_project_id or predicted_project_id
+
         default_project = None
-        if last_activity:
-            last_project_id = last_activity.get('project', {}).get('id')
-            project_to_move = next((p for p in assigned_projects if p['id'] == last_project_id), None)
-            if project_to_move:
-                assigned_projects.remove(project_to_move)
-                assigned_projects.insert(0, project_to_move)
-                default_project = project_to_move
+        if default_project_id:
+            project_to_make_default = next((p for p in assigned_projects if p['id'] == default_project_id), None)
+            if project_to_make_default:
+                assigned_projects.remove(project_to_make_default)
+                assigned_projects.insert(0, project_to_make_default)
+                default_project = project_to_make_default
 
         return assigned_projects, default_project
 
