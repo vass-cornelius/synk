@@ -107,15 +107,15 @@ class TimeTracker:
 
     def get_project_choices(self, last_activity: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
-        Fetches and prepares the list of projects for user selection.
-        Projects are sorted by customer, then by recent usage, and finally by name.
+        Fetches and prepares the list of projects for user selection, sorted by client usage,
+        then client name, then project usage, and finally project name.
         """
         # Fetch recent activities to determine project usage frequency
         from_date = date.today() - timedelta(days=28)  # 4 weeks back
         to_date = date.today()
         params = {'user_id': self.moco_user_id, 'from': from_date.isoformat(), 'to': to_date.isoformat()}
         recent_activities = moco_get(self.moco_session, self.moco_subdomain, "activities", params=params)
-
+        
         project_usage_counts = {}
         for activity in recent_activities:
             project_id = activity.get('project', {}).get('id')
@@ -128,8 +128,21 @@ class TimeTracker:
         for p in assigned_projects:
             p['tasks'] = [t for t in p.get('tasks', []) if t.get('active', False)]
 
-        # Sort by customer, then by usage (desc), then by project name (asc)
-        assigned_projects.sort(key=lambda p: (p.get('customer', {}).get('name', '').lower(), -project_usage_counts.get(p['id'], 0), p.get('name', '').lower()))
+        # Calculate total usage per client to sort clients by usage
+        client_usage_counts = {}
+        for p in assigned_projects:
+            client_id = p.get('customer', {}).get('id')
+            if client_id:
+                usage = project_usage_counts.get(p['id'], 0)
+                client_usage_counts[client_id] = client_usage_counts.get(client_id, 0) + usage
+
+        # Sort by client usage (desc), then client name (asc), then project usage (desc), then project name (asc)
+        assigned_projects.sort(key=lambda p: (
+            -client_usage_counts.get(p.get('customer', {}).get('id'), 0),
+            p.get('customer', {}).get('name', '').lower(),
+            -project_usage_counts.get(p['id'], 0),
+            p.get('name', '').lower()
+        ))
 
         default_project = None
         if last_activity:
