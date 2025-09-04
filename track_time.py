@@ -70,9 +70,14 @@ def ask_for_project(console, assigned_projects, default_project):
         project_prompt.append(f" (empty for last used: {customer_name} / {project_name})")
 
     console.print(project_prompt)
+    last_customer = None
     for i, p in enumerate(assigned_projects):
         customer = p.get('customer', {}).get('name', 'No Customer')
+        # Add a newline if the customer is different from the last one
+        if last_customer is not None and customer != last_customer:
+            console.print(f"-")
         console.print(f"  [magenta][{i+1:>2}][/magenta] {customer} / {p['name']}")
+        last_customer = customer
     
     while True:
         try:
