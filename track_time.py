@@ -187,14 +187,14 @@ def ask_for_time(console, tracker, last_activity, project: dict = None):
     
     start_prompt = Text("\n▶️ ", style="cyan", end="")
     start_prompt.append("When did you start?", style="bold")
-    if last_end_time: start_prompt.append(f" ('last' for {last_end_time})")
+    if last_end_time: start_prompt.append(f" ('last' or 'l' for {last_end_time})")
     
     while True:
         start_time_input = Prompt.ask(start_prompt)
-        if start_time_input.lower() == 'last' and last_end_time:
+        if (start_time_input.lower() == 'last' or start_time_input.lower() == 'l') and last_end_time:
             start_time_str = last_end_time
             break
-        if start_time_input.lower() == 'last' and not last_end_time:
+        if (start_time_input.lower() == 'last' or start_time_input.lower() == 'l') and not last_end_time:
             console.print(f"  [yellow]No previous entries to start after.[/yellow]")
         
         parsed_time = parse_and_validate_time_input(start_time_input)
@@ -202,7 +202,7 @@ def ask_for_time(console, tracker, last_activity, project: dict = None):
             start_time_str = parsed_time
             break
         else:
-            console.print("  [red]Invalid format. Use (h)hmm (e.g., 800 or 1730) or 'last'.[/red]")
+            console.print("  [red]Invalid format. Use (h)hmm (e.g., 800 or 1730) or 'last'/'l'.[/red]")
 
     end_prompt = Text("▶️ ", style="cyan", end="")
     end_prompt.append(f"When did you finish? (start: {start_time_str})", style="bold")
