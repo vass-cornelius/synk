@@ -340,6 +340,31 @@ def handle_preview_and_exit(console: Console, days_ago: int):
     
     sys.exit(0)
 
+def handle_weekly_preview_and_exit(console: Console, weeks_ago: int):
+    """Handles the weekly preview functionality and exits the script."""
+    try:
+        config = setup_clients(console, is_preview=True)
+        tracker = TimeTracker(config)
+        
+        today = date.today()
+        start_of_week = today - timedelta(days=today.weekday(), weeks=weeks_ago)
+        
+        for i in range(7):
+            preview_date = start_of_week + timedelta(days=i)
+            console.print(f"\n[bold]🗓️  Entries for {preview_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+            with console.status("[yellow]Fetching entries for preview...[/yellow]"):
+                daily_entries = tracker.get_daily_entries(preview_date)
+            display_daily_entries(console, daily_entries)
+
+    except SynkError as e:
+        console.print(f"\n[bold red]❌ An error occurred:[/bold red]\n{e}")
+        sys.exit(1)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n\n[bold yellow]Operation cancelled. Goodbye! 👋[/bold yellow]")
+        sys.exit(0)
+    
+    sys.exit(0)
+
 def main_loop(console: Console, config):
     """The main application logic, wrapped to handle exceptions gracefully."""
     tracker = TimeTracker(config)
@@ -452,20 +477,28 @@ def main():
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="Synk Time Tracking Tool.")
     parser.add_argument("-t", type=int, nargs='?', const=0, default=None, help="Display entries for a specific day. -t for today, -t1 for yesterday, etc.")
+    parser.add_argument("-w", type=int, nargs='?', const=0, default=None, help="Display entries for a specific week. -w for this week, -w1 for last week, etc.")
     args, unknown_args = parser.parse_known_args()
 
     if args.t is not None:
         handle_preview_and_exit(console, args.t)
+    
+    if args.w is not None:
+        handle_weekly_preview_and_exit(console, args.w)
 
-    # Fallback for -tN format
+    # Fallback for -tN and -wN format
     for arg in unknown_args:
         if arg.startswith('-t'):
             try:
                 days_ago = int(arg[2:])
                 handle_preview_and_exit(console, days_ago)
             except ValueError:
-                # This case handles -t without a number, which is already covered by the main parser
-                # We can ignore it here.
+                pass
+        elif arg.startswith('-w'):
+            try:
+                weeks_ago = int(arg[2:])
+                handle_weekly_preview_and_exit(console, weeks_ago)
+            except ValueError:
                 pass
 
     # --- Main Application Logic ---
