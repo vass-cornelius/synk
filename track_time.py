@@ -3,7 +3,8 @@ import os
 import re
 import sys
 import json
-from datetime import date, datetime
+import argparse
+from datetime import date, datetime, timedelta
 
 # --- Rich and other library imports ---
 import requests
@@ -219,7 +220,7 @@ def ask_for_time(console, tracker, last_activity, project: dict = None):
     return start_time_str, end_time_str, duration_hours
 
 # --- SETUP AND VERIFICATION ---
-def setup_clients(console):
+def setup_clients(console, is_preview=False):
     """Load environment variables, verify credentials, and initialize API clients."""
     load_dotenv()
     config = {
@@ -234,14 +235,16 @@ def setup_clients(console):
     if not all([config["moco_subdomain"], config["moco_api_key"]]):
         raise SynkError("Moco configuration is missing in your .env file. Please run install.py again.")
 
-    with console.status("[yellow]Connecting to services...[/yellow]"):
+    status_context = console.status("[yellow]Connecting to services...[/yellow]") if not is_preview else open(os.devnull, 'w')
+    with status_context:
         try:
             auth_header = {'Authorization': f'Bearer {config["moco_api_key"]}'}
             session_url = f"https://{config['moco_subdomain']}.mocoapp.com/api/v1/session"
             response = requests.get(session_url, headers=auth_header)
             response.raise_for_status()
             config["moco_user_id"] = response.json()['id']
-            console.print("✅ [green]Moco connection successful.[/green]")
+            if not is_preview:
+                console.print("✅ [green]Moco connection successful.[/green]")
         except (requests.exceptions.RequestException, KeyError) as e:
             raise SynkError(f"Moco connection failed: {e}") from e
 
@@ -250,24 +253,28 @@ def setup_clients(console):
             min_dur = os.getenv("MIN_DURATION_MINUTES")
             config["min_duration_minutes"] = int(min_dur) if min_dur else None
         except (ValueError, TypeError):
-            console.print("[yellow]Warning: MIN_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
+            if not is_preview:
+                console.print("[yellow]Warning: MIN_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
             config["min_duration_minutes"] = None
         
         try:
             max_dur = os.getenv("MAX_DURATION_MINUTES")
             config["max_duration_minutes"] = int(max_dur) if max_dur else None
         except (ValueError, TypeError):
-            console.print("[yellow]Warning: MAX_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
+            if not is_preview:
+                console.print("[yellow]Warning: MAX_DURATION_MINUTES is not a valid number. Ignoring.[/yellow]")
             config["max_duration_minutes"] = None
 
         try:
             rounding_str = os.getenv("DURATION_ROUNDING_INCREMENT")
             config["duration_rounding_increment"] = float(rounding_str) if rounding_str else None
             if config["duration_rounding_increment"] is not None and config["duration_rounding_increment"] <= 0:
-                console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT must be positive. Ignoring.[/yellow]")
+                if not is_preview:
+                    console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT must be positive. Ignoring.[/yellow]")
                 config["duration_rounding_increment"] = None
         except (ValueError, TypeError):
-            console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT is not a valid number. Ignoring.[/yellow]")
+            if not is_preview:
+                console.print("[yellow]Warning: DURATION_ROUNDING_INCREMENT is not a valid number. Ignoring.[/yellow]")
             config["duration_rounding_increment"] = None
 
         rules_str = os.getenv("PROJECT_DURATION_RULES")
@@ -277,7 +284,7 @@ def setup_clients(console):
             raise SynkError("Invalid format for PROJECT_DURATION_RULES in .env. It must be valid JSON.")
 
         jira_instance_names = [name.strip() for name in os.getenv("JIRA_INSTANCES", "").split(',') if name.strip()]
-        if not jira_instance_names:
+        if not jira_instance_names and not is_preview:
             console.print("[yellow]No JIRA instances configured. JIRA features will be disabled.[/yellow]")
         
         for name in jira_instance_names:
@@ -300,7 +307,8 @@ def setup_clients(console):
                     "client": client,
                     "keys": keys
                 }
-                console.print(f"✅ [green]JIRA connection successful for '{name}'.[/green]")
+                if not is_preview:
+                    console.print(f"✅ [green]JIRA connection successful for '{name}'.[/green]")
             except JIRAError as e:
                 raise SynkError(f"JIRA connection failed for '{name}': {e.text}") from e
             
@@ -309,10 +317,31 @@ def setup_clients(console):
 
     return config
 
-def main_loop(console: Console):
+def handle_preview_and_exit(console: Console, days_ago: int):
+    """Handles the preview functionality and exits the script."""
+    try:
+        config = setup_clients(console, is_preview=True)
+        tracker = TimeTracker(config)
+        
+        preview_date = date.today() - timedelta(days=days_ago)
+        
+        console.print(f"\n[bold]🗓️  Entries for {preview_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+        with console.status("[yellow]Fetching entries for preview...[/yellow]"):
+            daily_entries = tracker.get_daily_entries(preview_date)
+        
+        display_daily_entries(console, daily_entries)
+
+    except SynkError as e:
+        console.print(f"\n[bold red]❌ An error occurred:[/bold red]\n{e}")
+        sys.exit(1)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n\n[bold yellow]Operation cancelled. Goodbye! 👋[/bold yellow]")
+        sys.exit(0)
+    
+    sys.exit(0)
+
+def main_loop(console: Console, config):
     """The main application logic, wrapped to handle exceptions gracefully."""
-    console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
-    config = setup_clients(console)
     tracker = TimeTracker(config)
 
     while True:
@@ -419,8 +448,31 @@ def main_loop(console: Console):
 def main():
     """Initializes the console and runs the main application."""
     console = Console()
+
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(description="Synk Time Tracking Tool.")
+    parser.add_argument("-t", type=int, nargs='?', const=0, default=None, help="Display entries for a specific day. -t for today, -t1 for yesterday, etc.")
+    args, unknown_args = parser.parse_known_args()
+
+    if args.t is not None:
+        handle_preview_and_exit(console, args.t)
+
+    # Fallback for -tN format
+    for arg in unknown_args:
+        if arg.startswith('-t'):
+            try:
+                days_ago = int(arg[2:])
+                handle_preview_and_exit(console, days_ago)
+            except ValueError:
+                # This case handles -t without a number, which is already covered by the main parser
+                # We can ignore it here.
+                pass
+
+    # --- Main Application Logic ---
     try:
-        main_loop(console)
+        console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
+        config = setup_clients(console)
+        main_loop(console, config)
     except SynkError as e:
         console.print(f"\n[bold red]❌ An unrecoverable error occurred:[/bold red]\n{e}")
         sys.exit(1)
