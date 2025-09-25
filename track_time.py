@@ -235,20 +235,9 @@ def setup_clients(console, is_preview=False):
     if not all([config["moco_subdomain"], config["moco_api_key"]]):
         raise SynkError("Moco configuration is missing in your .env file. Please run install.py again.")
 
-    status_context = console.status("[yellow]Connecting to services...[/yellow]") if not is_preview else open(os.devnull, 'w')
-    with status_context:
-        try:
-            auth_header = {'Authorization': f'Bearer {config["moco_api_key"]}'}
-            session_url = f"https://{config['moco_subdomain']}.mocoapp.com/api/v1/session"
-            response = requests.get(session_url, headers=auth_header)
-            response.raise_for_status()
-            config["moco_user_id"] = response.json()['id']
-            if not is_preview:
-                console.print("✅ [green]Moco connection successful.[/green]")
-        except (requests.exceptions.RequestException, KeyError) as e:
-            raise SynkError(f"Moco connection failed: {e}") from e
-
-        # Parse duration rules
+    status_context_configuration = console.status("[yellow]Verifying configuration is valid...[/yellow]") if not is_preview else open(os.devnull, 'w')
+    # Parse duration rules
+    with status_context_configuration:
         try:
             min_dur = os.getenv("MIN_DURATION_MINUTES")
             config["min_duration_minutes"] = int(min_dur) if min_dur else None
@@ -282,6 +271,22 @@ def setup_clients(console, is_preview=False):
             config["project_duration_rules"] = json.loads(rules_str) if rules_str else {}
         except json.JSONDecodeError:
             raise SynkError("Invalid format for PROJECT_DURATION_RULES in .env. It must be valid JSON.")
+
+        console.print("✅ [green]Configuration is valid.[/green]")
+
+    # Verify Moco connection
+    status_context = console.status("[yellow]Connecting to services...[/yellow]") if not is_preview else open(os.devnull, 'w')
+    with status_context:
+        try:
+            auth_header = {'Authorization': f'Bearer {config["moco_api_key"]}'}
+            session_url = f"https://{config['moco_subdomain']}.mocoapp.com/api/v1/session"
+            response = requests.get(session_url, headers=auth_header)
+            response.raise_for_status()
+            config["moco_user_id"] = response.json()['id']
+            if not is_preview:
+                console.print("✅ [green]Moco connection successful.[/green]")
+        except (requests.exceptions.RequestException, KeyError) as e:
+            raise SynkError(f"Moco connection failed: {e}") from e
 
         jira_instance_names = [name.strip() for name in os.getenv("JIRA_INSTANCES", "").split(',') if name.strip()]
         if not jira_instance_names and not is_preview:
@@ -460,11 +465,12 @@ def main_loop(console: Console, config):
 
         last_activity = tracker.get_last_activity(work_date)
 
+        console.print(f"\n[bold]🗓️  Entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
+        with console.status("[yellow]Fetching updated entries...[/yellow]"):
+            daily_entries = tracker.get_daily_entries(work_date)
+        display_daily_entries(console, daily_entries)
+
         if not Confirm.ask("\n[bold]➕ Add another entry for this date?[/bold]", default=True):
-            console.print(f"\n[bold]🗓️  Final entries for {work_date.strftime('%A, %Y-%m-%d')}:[/bold]")
-            with console.status("[yellow]Fetching updated entries...[/yellow]"):
-                daily_entries = tracker.get_daily_entries(work_date)
-            display_daily_entries(console, daily_entries)
             break
             
     console.print("\n[bold blue]Time tracking finished. Goodbye! 👋[/bold blue]")
@@ -503,8 +509,11 @@ def main():
 
     # --- Main Application Logic ---
     try:
+        console.print("\n")
         console.print(Panel.fit("🚀 [bold blue]Synk Time Tracking Tool[/bold blue] 🚀"))
+        console.print("\n")
         config = setup_clients(console)
+        console.print("\n")
         main_loop(console, config)
     except SynkError as e:
         console.print(f"\n[bold red]❌ An unrecoverable error occurred:[/bold red]\n{e}")
