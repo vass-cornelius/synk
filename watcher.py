@@ -67,12 +67,13 @@ def get_last_entry_end_time(subdomain, api_key, user_id):
 
     activities.sort(key=lambda x: x.get('id', 0), reverse=True)
     description = activities[0].get("description", "")
-    match = re.search(r'\((\d{2}:\d{2})-(\d{2}:\d{2})\)', description)
+    # The time is stored as (hhmm-hhmm) in the description
+    match = re.search(r'\((\d{4})-(\d{4})\)', description)
 
     if match:
-        end_time_str = match.group(2)
+        end_time_hhmm = match.group(2)
         # Combine today's date with the parsed end time
-        return datetime.strptime(f"{today_iso} {end_time_str}", "%Y-%m-%d %H:%M")
+        return datetime.strptime(f"{today_iso} {end_time_hhmm[:2]}:{end_time_hhmm[2:]}", "%Y-%m-%d %H:%M")
     
     return None
 
