@@ -274,7 +274,7 @@ def setup_clients(console, is_preview=False):
 
         console.print("✅ [green]Configuration is valid.[/green]")
 
-    # Verify Moco connection
+    # Verify Moco and JIRA connection(s)
     status_context = console.status("[yellow]Connecting to services...[/yellow]") if not is_preview else open(os.devnull, 'w')
     with status_context:
         try:
