@@ -1,3 +1,5 @@
 .env
 nohup.out
 venv/
+.idea/
+__pycache__
